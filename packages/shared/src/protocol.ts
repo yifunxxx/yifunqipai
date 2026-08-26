@@ -1,0 +1,150 @@
+/** 统一消息信封 */
+export interface Envelope<T = unknown> {
+  type: string;
+  requestId?: string;
+  payload: T;
+}
+
+export type GameType = "mahjong" | "tenhalf";
+
+export type RoomPhase = "waiting" | "playing" | "settled";
+
+export interface AuthLoginPayload {
+  username: string;
+}
+
+export interface AuthHelloPayload {
+  sessionToken: string;
+}
+
+export interface AuthOkPayload {
+  sessionToken: string;
+  userId: string;
+  username: string;
+  expiresAt: number;
+}
+
+export interface LobbyListGamesPayload {
+  games: Array<{
+    id: GameType;
+    name: string;
+    description: string;
+    minPlayers: number;
+    maxPlayers: number;
+  }>;
+}
+
+export interface MahjongRoomConfig {
+  tileCount: 112 | 144;
+  baseScore: number;
+  maxRounds: number;
+  botCount: number;
+}
+
+export interface TenhalfRoomConfig {
+  mode: "banker" | "free";
+  potPerPlayer: number;
+  botCount: number;
+  maxPlayers: number;
+  botStopAt: number;
+}
+
+export type RoomConfig = MahjongRoomConfig | TenhalfRoomConfig;
+
+export interface SeatInfo {
+  seat: number;
+  userId: string | null;
+  username: string;
+  isBot: boolean;
+  ready: boolean;
+  connected: boolean;
+  score: number;
+}
+
+export interface RoomSummary {
+  roomId: string;
+  name: string;
+  gameType: GameType;
+  phase: RoomPhase;
+  hostUserId: string;
+  seats: SeatInfo[];
+  maxSeats: number;
+  config: RoomConfig;
+  matchId?: string;
+}
+
+export interface RoomCreatePayload {
+  gameType: GameType;
+  name?: string;
+  config: Partial<RoomConfig>;
+}
+
+export interface RoomJoinPayload {
+  roomId: string;
+}
+
+export interface RoomReadyPayload {
+  ready: boolean;
+}
+
+export interface RoomAddBotPayload {
+  count?: number;
+}
+
+export interface RoomUpdateConfigPayload {
+  config: Partial<RoomConfig>;
+}
+
+export interface SysErrorPayload {
+  code: string;
+  message: string;
+  requestId?: string;
+}
+
+export interface SysKickedPayload {
+  reason: string;
+}
+
+/** 麻将动作 */
+export type MahjongActionType =
+  | "discard"
+  | "peng"
+  | "mingGang"
+  | "anGang"
+  | "buGang"
+  | "hu"
+  | "pass"
+  | "lockSelect";
+
+export interface GameActionPayload {
+  action: string;
+  data?: Record<string, unknown>;
+}
+
+export interface ScoreEvent {
+  kind: string;
+  description: string;
+  deltas: Array<{ seat: number; delta: number }>;
+  at: number;
+}
+
+export const PROTOCOL_VERSION = 1;
+
+export const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+export const GAME_CATALOG: LobbyListGamesPayload["games"] = [
+  {
+    id: "mahjong",
+    name: "陕西麻将",
+    description: "112/144 张，碰杠胡，无吃",
+    minPlayers: 4,
+    maxPlayers: 4,
+  },
+  {
+    id: "tenhalf",
+    name: "十点半",
+    description: "打庄/通比，2–6 人",
+    minPlayers: 2,
+    maxPlayers: 6,
+  },
+];

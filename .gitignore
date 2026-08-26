@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.tools/
+
+# Build
+dist/
+packages/*/dist/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Data & logs
+*.db
+*.db-*
+/data/
+logs/
+*.log
+
+# Coverage & test
+coverage/
+.nyc_output/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Client local config (user home is preferred; ignore if present in repo)
+config.local.json
+
+# Docker volume leftovers
+docker-data/
+
+# Pack artifacts
+*.tgz

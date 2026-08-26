@@ -1,0 +1,37 @@
+{
+  "name": "@yifun/qipai-cli",
+  "version": "0.1.0",
+  "description": "终端棋牌大厅客户端：陕西麻将与十点半",
+  "type": "module",
+  "bin": {
+    "yifunqipai": "./bin/yifunqipai.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts || exit 0"
+  },
+  "dependencies": {
+    "@yifun/qipai-shared": "workspace:*",
+    "blessed": "^0.1.81",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/blessed": "^0.1.25",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": ["mahjong", "poker", "tui", "cli", "qipai"],
+  "license": "MIT"
+}
