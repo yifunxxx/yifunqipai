@@ -9,6 +9,8 @@ import {
   type RoomJoinPayload,
   type RoomReadyPayload,
   type RoomAddBotPayload,
+  type RoomRemoveBotPayload,
+  type RoomSetHostPayload,
   type RoomUpdateConfigPayload,
   type AuthLoginPayload,
   type AuthHelloPayload,
@@ -202,6 +204,23 @@ export function createApp(opts: {
         const p = (payload ?? {}) as RoomAddBotPayload;
         if (!ctx.roomId) throw Object.assign(new Error("不在房间"), { code: "NOT_IN_ROOM" });
         const room = lobby.addBots(ctx.roomId, ctx.userId!, p.count ?? 1);
+        broadcastRoom(room.roomId);
+        break;
+      }
+      case "room.removeBot": {
+        const p = (payload ?? {}) as RoomRemoveBotPayload;
+        if (!ctx.roomId) throw Object.assign(new Error("不在房间"), { code: "NOT_IN_ROOM" });
+        const room = lobby.removeBot(ctx.roomId, ctx.userId!, p.seat);
+        broadcastRoom(room.roomId);
+        break;
+      }
+      case "room.setHost": {
+        const p = payload as RoomSetHostPayload;
+        if (!ctx.roomId) throw Object.assign(new Error("不在房间"), { code: "NOT_IN_ROOM" });
+        if (typeof p?.seat !== "number") {
+          throw Object.assign(new Error("请指定座位号"), { code: "BAD_REQUEST" });
+        }
+        const room = lobby.setHost(ctx.roomId, ctx.userId!, p.seat);
         broadcastRoom(room.roomId);
         break;
       }

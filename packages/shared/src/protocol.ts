@@ -47,6 +47,8 @@ export interface TenhalfRoomConfig {
   botCount: number;
   maxPlayers: number;
   botStopAt: number;
+  /** 总局数，打完自动结束并统分 */
+  maxRounds: number;
 }
 
 export type RoomConfig = MahjongRoomConfig | TenhalfRoomConfig;
@@ -71,6 +73,8 @@ export interface RoomSummary {
   maxSeats: number;
   config: RoomConfig;
   matchId?: string;
+  /** 已完成局数 */
+  roundIndex: number;
 }
 
 export interface RoomCreatePayload {
@@ -89,6 +93,16 @@ export interface RoomReadyPayload {
 
 export interface RoomAddBotPayload {
   count?: number;
+}
+
+export interface RoomRemoveBotPayload {
+  /** 不传则移除编号最大的一个人机 */
+  seat?: number;
+}
+
+export interface RoomSetHostPayload {
+  /** 目标座位号（须为真人玩家） */
+  seat: number;
 }
 
 export interface RoomUpdateConfigPayload {

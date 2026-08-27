@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm -r run build",
     "dev:server": "pnpm --filter @yifun/qipai-server dev",
-    "dev:client": "pnpm --filter @yifun/qipai-cli start",
+    "dev:client": "pnpm --filter @yifunxxx/qipai-cli start",
     "start:server": "pnpm --filter @yifun/qipai-server start",
     "test": "pnpm -r run test",
     "typecheck": "pnpm -r run typecheck"

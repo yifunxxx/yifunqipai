@@ -72,6 +72,8 @@ export interface MahjongSnapshot {
   /** 仅发给对应座位的手牌 */
   selfHand?: Tile[];
   selfSeat?: number;
+  /** 刚摸进、尚未打出的那张（在手牌末尾） */
+  justDrew?: Tile;
   availableActions: string[];
   logs: string[];
   scoreEvents: ScoreEvent[];
@@ -79,7 +81,11 @@ export interface MahjongSnapshot {
   huType?: string;
   roundIndex: number;
   maxRounds: number;
+  /** 真人出牌/鸣牌截止时间（仅至少两名真人对局） */
+  turnDeadlineAt?: number;
 }
+
+export const HUMAN_TURN_MS = 60_000;
 
 interface InternalState {
   matchId: string;
@@ -103,6 +109,7 @@ interface InternalState {
   roundIndex: number;
   justDrew?: Tile;
   pendingBuGang?: { seat: number; tile: Tile };
+  turnDeadlineAt?: number;
 }
 
 function rollDealer(rng: () => number): number {
@@ -167,6 +174,7 @@ export class MahjongEngine {
     };
 
     this.drawForCurrent();
+    this.armDeadline();
   }
 
   static fromJSON(raw: string): MahjongEngine {
@@ -210,7 +218,6 @@ export class MahjongEngine {
     const tile = this.s.wall.pop()!;
     const p = this.s.players[this.s.currentSeat]!;
     p.hand.push(tile);
-    p.hand = sortTiles(p.hand);
     this.s.justDrew = tile;
     this.s.phase = "discard";
     this.s.logs.push(`座位${this.s.currentSeat} 摸牌`);
@@ -279,6 +286,7 @@ export class MahjongEngine {
       })),
       selfHand: self ? self.hand : undefined,
       selfSeat: self?.seat,
+      justDrew: self && this.s.justDrew && self.seat === this.s.currentSeat ? this.s.justDrew : undefined,
       availableActions: self ? this.getAvailableActions(self.seat) : [],
       logs: this.s.logs.slice(-40),
       scoreEvents: this.s.scoreEvents.slice(-20),
@@ -286,6 +294,7 @@ export class MahjongEngine {
       huType: this.s.huType,
       roundIndex: this.s.roundIndex,
       maxRounds: this.s.config.maxRounds,
+      turnDeadlineAt: this.s.turnDeadlineAt,
     };
   }
 
@@ -345,6 +354,75 @@ export class MahjongEngine {
       default:
         throw Object.assign(new Error("未知动作"), { code: "BAD_ACTION" });
     }
+    this.armDeadline();
+  }
+
+  private humanCount(): number {
+    return this.s.players.filter((p) => !p.isBot).length;
+  }
+
+  /** 当前需要真人行动的座位 */
+  waitingHumanSeats(): number[] {
+    const s = this.s;
+    if (s.phase === "settled" || s.phase === "liuju") return [];
+    if (s.phase === "claim") {
+      return s.claimOptions
+        .filter((o) => !s.claimResponses.has(o.seat))
+        .map((o) => o.seat)
+        .filter((seat) => !s.players[seat]?.isBot);
+    }
+    if (s.phase === "discard" || s.phase === "draw") {
+      const p = s.players[s.currentSeat];
+      if (p && !p.isBot) return [p.seat];
+    }
+    return [];
+  }
+
+  private armDeadline(): void {
+    if (this.humanCount() < 2) {
+      this.s.turnDeadlineAt = undefined;
+      return;
+    }
+    const waiting = this.waitingHumanSeats();
+    this.s.turnDeadlineAt = waiting.length ? Date.now() + HUMAN_TURN_MS : undefined;
+  }
+
+  /** 真人超时：自动出牌或过 */
+  tryHumanTimeout(): boolean {
+    if (this.humanCount() < 2) return false;
+    if (this.waitingHumanSeats().length && !this.s.turnDeadlineAt) {
+      this.armDeadline();
+      return false;
+    }
+    const at = this.s.turnDeadlineAt;
+    if (!at || Date.now() < at) return false;
+    const seats = this.waitingHumanSeats();
+    const seat = seats[0];
+    if (seat === undefined) {
+      this.s.turnDeadlineAt = undefined;
+      return false;
+    }
+    const p = this.s.players[seat]!;
+    const acts = this.getAvailableActions(seat);
+    this.s.logs.push(`座位${seat} 超时，系统代打`);
+    try {
+      if (acts.includes("discard")) {
+        const tile = this.s.justDrew && p.hand.some((t) => t.id === this.s.justDrew!.id)
+          ? this.s.justDrew
+          : pickDiscard(p.hand);
+        this.action(p.userId, "discard", { tileId: tile.id });
+        return true;
+      }
+      if (acts.includes("pass")) {
+        this.action(p.userId, "pass", {});
+        return true;
+      }
+    } catch {
+      this.s.turnDeadlineAt = undefined;
+      return false;
+    }
+    this.s.turnDeadlineAt = undefined;
+    return false;
   }
 
   private doDiscard(seat: number, tileId: string): void {
@@ -356,6 +434,7 @@ export class MahjongEngine {
     this.s.lastDiscard = tile;
     this.s.lastDiscardSeat = seat;
     this.s.justDrew = undefined;
+    p.hand = sortTiles(p.hand);
     this.s.logs.push(`座位${seat} 打出 ${tileKey(tile!)}`);
 
     // 收集吃碰杠胡（无吃）
@@ -436,6 +515,8 @@ export class MahjongEngine {
     if (best.action === "peng") {
       const taken = this.takeTiles(p, tileKey(tile), 2);
       p.melds.push({ type: "peng", tiles: [...taken, tile], fromSeat: from });
+      p.hand = sortTiles(p.hand);
+      this.s.justDrew = undefined;
       this.s.currentSeat = best.seat;
       this.s.phase = "discard";
       this.s.claimOptions = [];
@@ -459,6 +540,7 @@ export class MahjongEngine {
       this.s.currentSeat = best.seat;
       this.s.claimOptions = [];
       this.s.claimResponses = new Map();
+      p.hand = sortTiles(p.hand);
       this.s.phase = "draw";
       this.drawForCurrent();
     }
@@ -543,6 +625,7 @@ export class MahjongEngine {
     );
     this.s.gangCount += 1;
     this.s.phase = "draw";
+    p.hand = sortTiles(p.hand);
     this.drawForCurrent();
   }
 
@@ -573,6 +656,7 @@ export class MahjongEngine {
     );
     this.s.gangCount += 1;
     this.s.phase = "draw";
+    p.hand = sortTiles(p.hand);
     this.drawForCurrent();
   }
 

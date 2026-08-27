@@ -26,8 +26,8 @@ export interface RoomState {
 function defaultMahjongConfig(partial?: Partial<MahjongRoomConfig>): MahjongRoomConfig {
   return {
     tileCount: partial?.tileCount === 144 ? 144 : 112,
-    baseScore: partial?.baseScore ?? 1,
-    maxRounds: partial?.maxRounds ?? 4,
+    baseScore: Math.max(1, partial?.baseScore ?? 1),
+    maxRounds: Math.max(1, Math.min(64, partial?.maxRounds ?? 4)),
     botCount: Math.max(0, Math.min(3, partial?.botCount ?? 0)),
   };
 }
@@ -40,6 +40,7 @@ function defaultTenhalfConfig(partial?: Partial<TenhalfRoomConfig>): TenhalfRoom
     botCount: Math.max(0, Math.min(maxPlayers - 1, partial?.botCount ?? 0)),
     maxPlayers,
     botStopAt: partial?.botStopAt ?? 8,
+    maxRounds: Math.max(1, Math.min(64, partial?.maxRounds ?? 4)),
   };
 }
 
@@ -80,6 +81,7 @@ export class LobbyService {
       maxSeats: room.maxSeats,
       config: room.config,
       matchId: room.matchId,
+      roundIndex: room.roundIndex,
     };
   }
 
@@ -165,6 +167,53 @@ export class LobbyService {
   addBots(roomId: string, userId: string, count = 1): RoomState {
     const room = this.requireWaitingHost(roomId, userId);
     this.fillBots(room, count);
+    this.persist(room);
+    return room;
+  }
+
+  removeBot(roomId: string, userId: string, seat?: number): RoomState {
+    const room = this.requireWaitingHost(roomId, userId);
+    const bots = room.seats.filter((s) => s.isBot);
+    if (bots.length === 0) {
+      throw Object.assign(new Error("房间内无人机"), { code: "NO_BOT" });
+    }
+    const target =
+      seat !== undefined
+        ? room.seats.find((s) => s.seat === seat && s.isBot)
+        : [...bots].sort((a, b) => b.seat - a.seat)[0];
+    if (!target) {
+      throw Object.assign(new Error("指定座位不是人机"), { code: "NOT_BOT" });
+    }
+    target.userId = null;
+    target.username = "";
+    target.isBot = false;
+    target.ready = false;
+    target.connected = false;
+    if (room.gameType === "mahjong") {
+      (room.config as MahjongRoomConfig).botCount = Math.max(
+        0,
+        room.seats.filter((s) => s.isBot).length,
+      );
+    } else {
+      (room.config as TenhalfRoomConfig).botCount = Math.max(
+        0,
+        room.seats.filter((s) => s.isBot).length,
+      );
+    }
+    this.persist(room);
+    return room;
+  }
+
+  setHost(roomId: string, userId: string, seat: number): RoomState {
+    const room = this.requireWaitingHost(roomId, userId);
+    const target = room.seats.find((s) => s.seat === seat);
+    if (!target?.userId || target.isBot) {
+      throw Object.assign(new Error("只能转让给真人玩家"), { code: "INVALID_HOST" });
+    }
+    if (target.userId === room.hostUserId) {
+      throw Object.assign(new Error("对方已是房主"), { code: "ALREADY_HOST" });
+    }
+    room.hostUserId = target.userId;
     this.persist(room);
     return room;
   }
@@ -316,6 +365,11 @@ export class LobbyService {
     room.seats.forEach((s, i) => {
       if (scores[i] !== undefined) s.score += scores[i]!;
     });
+    this.persist(room);
+  }
+
+  bumpRound(room: RoomState): void {
+    room.roundIndex += 1;
     this.persist(room);
   }
 

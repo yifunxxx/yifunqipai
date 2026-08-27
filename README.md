@@ -1,6 +1,6 @@
 # 终端棋牌大厅
 
-TypeScript monorepo：WebSocket 服务端 + 终端客户端（`yifunqipai` / `@yifun/qipai-cli`）。
+TypeScript monorepo：WebSocket 服务端 + 终端客户端（`yifunqipai` / `@yifunxxx/qipai-cli`）。
 
 支持匿名会话登录、房间大厅、陕西麻将（112/144）、十点半（打庄/通比）、人机、断线重连与局内记分。
 
@@ -39,7 +39,7 @@ pnpm dev:client
 
 ```bash
 pnpm --filter @yifun/qipai-server start
-pnpm --filter @yifun/qipai-cli start
+pnpm --filter @yifunxxx/qipai-cli start
 ```
 
 ### 客户端配置
@@ -48,21 +48,21 @@ pnpm --filter @yifun/qipai-cli start
 
 ```bash
 # 通过 CLI
-pnpm --filter @yifun/qipai-cli start -- config set serverUrl ws://127.0.0.1:8787
-pnpm --filter @yifun/qipai-cli start -- config show
+pnpm --filter @yifunxxx/qipai-cli start -- config set serverUrl ws://127.0.0.1:8787
+pnpm --filter @yifunxxx/qipai-cli start -- config show
 ```
 
 全局安装本地包（开发自测）：
 
 ```bash
-pnpm --filter @yifun/qipai-cli build
+pnpm --filter @yifunxxx/qipai-cli build
 cd packages/client && pnpm pack
-npm i -g ./yifun-qipai-cli-0.1.0.tgz
+npm i -g ./yifunxxx-qipai-cli-0.1.0.tgz
 yifunqipai config set serverUrl ws://127.0.0.1:8787
 yifunqipai
 ```
 
-> 注意：本地 monorepo 依赖 `@yifun/qipai-shared`（workspace）。发布到 npm 前需先发布 shared，或将 shared 打进客户端包。
+> 发布到 npm 时只需发 `@yifunxxx/qipai-cli`：构建会把 shared 打进 `dist/cli.js`，用户 `npm i -g @yifunxxx/qipai-cli` 后执行 `yifunqipai` 即可。服务端需自行部署，客户端用 `yifunqipai config set serverUrl …` 指向它。
 
 ### 环境变量（服务端）
 
@@ -93,9 +93,9 @@ yifunqipai
 |------|------|
 | 登录 | Enter 输入用户名 |
 | 大厅 | `1` 麻将三人机 / `2` 十点半通比 / `3` 打庄 / `j` 加入 / `r` 刷新 |
-| 房间 | `y`/`u` 准备 / `b` 加人机 / `s` 开始 / `l` 离开 / `n` 再来一局 |
-| 麻将 | `←`/`→` 选牌，空格锁定，再空格出牌；`p`碰 `g`明杠 `h`胡 `a`暗杠 `b`补杠 `n`过 |
-| 十点半 | `h` 要牌 `s` 停牌 |
+| 房间 | `c`配置玩法 / `y`/`u`准备 / `b`加人机 / `d`移除人机 / `t`转让房主 / `s`开始 / `l`离开 |
+| 麻将 | 图二风格四家分区；`←`/`→`选牌，空格锁定再出牌；`p`碰 `g`明杠 `h`胡 `a`暗杠 `b`补杠 `n`过 |
+| 十点半 | 进行中 `h`要牌 `s`停牌；局间自动续局；全部局结束看累计分 |
 | 全局 | `q` 退出 |
 
 身份以 `sessionToken` 为准（可重名）。同一会话新连接会顶掉旧连接（旧端收到 `sys.kicked`）。
@@ -127,10 +127,12 @@ pnpm --filter @yifun/qipai-shared test
 
 ## 发布客户端到 npm（说明）
 
-1. 确认拥有 `@yifun` npm org 权限。
-2. 先发布 `@yifun/qipai-shared`（将 `private` 去掉并改依赖版本），或把 shared 源码打包进 cli。
-3. 在 `packages/client`：`pnpm build && npm publish --access public`
-4. 用户：`npm i -g @yifun/qipai-cli` → `yifunqipai`
+1. npm 用户名为 `yifunxxx`，公开包名是 `@yifunxxx/qipai-cli`（不要用 `@yifun/`，那个作用域不属于你）。
+2. 构建已把 shared 打进客户端，不必单独发布 shared。
+3. 登录官方源后再发布（日常安装可继续用国内镜像）：
+   `npm login --registry=https://registry.npmjs.org/`
+   `pnpm --filter @yifunxxx/qipai-cli publish`
+4. 用户：`npm i -g @yifunxxx/qipai-cli` → `yifunqipai config set serverUrl ws://…` → `yifunqipai`
 
 ## Git
 

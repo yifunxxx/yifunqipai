@@ -1,5 +1,5 @@
 {
-  "name": "@yifun/qipai-cli",
+  "name": "@yifunxxx/qipai-cli",
   "version": "0.1.0",
   "description": "终端棋牌大厅客户端：陕西麻将与十点半",
   "type": "module",
@@ -12,13 +12,17 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "pnpm --dir ../shared run build && node ./scripts/build.mjs",
     "start": "tsx src/cli.ts",
+    "prepack": "pnpm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test src/**/*.test.ts || exit 0"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
-    "@yifun/qipai-shared": "workspace:*",
     "blessed": "^0.1.81",
     "ws": "^8.18.0"
   },
@@ -26,6 +30,8 @@
     "@types/blessed": "^0.1.25",
     "@types/node": "^22.10.2",
     "@types/ws": "^8.5.13",
+    "@yifun/qipai-shared": "workspace:*",
+    "esbuild": "^0.25.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },

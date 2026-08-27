@@ -8,8 +8,8 @@ import {
   isShiSanYao,
   type Meld,
 } from "./mahjong-rules.js";
-import { makeTile, resetTileSeq, type Tile } from "./tiles.js";
-import { compareHands, isTenHalf, isWuLong, type PokerCard } from "./poker.js";
+import { makeTile, resetTileSeq, tileGlyph, type Tile } from "./tiles.js";
+import { compareHands, isTenHalf, isWuLong, pokerLabel, type PokerCard } from "./poker.js";
 
 function t(suit: Tile["suit"], rank: number): Tile {
   return makeTile(suit, rank);
@@ -143,5 +143,31 @@ describe("tenhalf strength", () => {
     assert.equal(isWuLong(wulong), true);
     assert.equal(isTenHalf(tenhalf), true);
     assert.ok(compareHands(wulong, tenhalf) > 0);
+  });
+});
+
+describe("pokerLabel", () => {
+  it("uses suit symbols", () => {
+    assert.equal(pokerLabel({ id: "1", suit: "S", rank: 1 }), "♠A");
+    assert.equal(pokerLabel({ id: "2", suit: "H", rank: 10 }), "♥10");
+    assert.equal(pokerLabel({ id: "3", suit: "D", rank: 13 }), "♦K");
+    assert.equal(pokerLabel({ id: "4", suit: "C", rank: 11 }), "♣J");
+  });
+});
+
+describe("tileGlyph", () => {
+  const g = (cp: number) => String.fromCodePoint(cp, 0xfe0f);
+  it("maps wan/tiao/tong and honors", () => {
+    assert.equal(tileGlyph({ suit: "wan", rank: 1 }), g(0x1f007));
+    assert.equal(tileGlyph({ suit: "wan", rank: 9 }), g(0x1f00f));
+    assert.equal(tileGlyph({ suit: "tiao", rank: 1 }), g(0x1f010));
+    assert.equal(tileGlyph({ suit: "tiao", rank: 9 }), g(0x1f018));
+    assert.equal(tileGlyph({ suit: "tong", rank: 1 }), g(0x1f019));
+    assert.equal(tileGlyph({ suit: "tong", rank: 9 }), g(0x1f021));
+    assert.equal(tileGlyph({ suit: "zi", rank: 1 }), g(0x1f000));
+    assert.equal(tileGlyph({ suit: "zi", rank: 4 }), g(0x1f003));
+    assert.equal(tileGlyph({ suit: "zi", rank: 5 }), g(0x1f004));
+    assert.equal(tileGlyph({ suit: "zi", rank: 6 }), g(0x1f005));
+    assert.equal(tileGlyph({ suit: "zi", rank: 7 }), g(0x1f006));
   });
 });

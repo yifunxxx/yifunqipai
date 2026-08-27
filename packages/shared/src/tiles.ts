@@ -21,6 +21,34 @@ export function tileLabel(t: Pick<Tile, "suit" | "rank">): string {
   return zi[t.rank] ?? "?";
 }
 
+/** emoji 变体：Windows Terminal 里牌面更大 */
+function mahjongChar(cp: number): string {
+  return String.fromCodePoint(cp, 0xfe0f);
+}
+
+/**
+ * Unicode 麻将牌面（U+1F000 区）。
+ * 使用 emoji 变体，让字形比旁边汉字更大。
+ */
+export function tileGlyph(t: Pick<Tile, "suit" | "rank">): string {
+  if (t.suit === "wan" && t.rank >= 1 && t.rank <= 9) {
+    return mahjongChar(0x1f007 + t.rank - 1);
+  }
+  if (t.suit === "tiao" && t.rank >= 1 && t.rank <= 9) {
+    return mahjongChar(0x1f010 + t.rank - 1);
+  }
+  if (t.suit === "tong" && t.rank >= 1 && t.rank <= 9) {
+    return mahjongChar(0x1f019 + t.rank - 1);
+  }
+  if (t.suit === "zi") {
+    const codes = [0x1f000, 0x1f001, 0x1f002, 0x1f003, 0x1f004, 0x1f005, 0x1f006];
+    const cp = codes[t.rank - 1];
+    if (!cp) return "?";
+    return mahjongChar(cp);
+  }
+  return tileLabel(t);
+}
+
 export function tileColorHint(t: Pick<Tile, "suit" | "rank">): string {
   if (t.suit === "wan") return "red";
   if (t.suit === "tong") return "blue";

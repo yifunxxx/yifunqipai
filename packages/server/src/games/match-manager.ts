@@ -121,22 +121,46 @@ export class MatchManager {
       const room = this.lobby.get(roomId);
       if (room) {
         this.lobby.markSettled(room, engine.getScores());
-        if (engine instanceof MahjongEngine) {
-          const winner = engine.getWinnerSeat();
-          // 流局连庄：dealer 已在引擎内保持；赢家坐庄已设置
-          room.roundIndex += 1;
-          if (winner !== undefined) {
-            // dealer already winner inside engine for next round start
-          }
-        }
+        this.lobby.bumpRound(room);
       }
-      this.clearBotTimer(engine instanceof MahjongEngine ? engine.snapshotFor().matchId : engine.snapshotFor().matchId);
-    } else {
-      this.scheduleBots(
-        engine instanceof MahjongEngine ? engine.snapshotFor().matchId : engine.snapshotFor().matchId,
-      );
+      const matchId =
+        engine instanceof MahjongEngine
+          ? engine.snapshotFor().matchId
+          : engine.snapshotFor().matchId;
+      this.clearBotTimer(matchId);
+      this.broadcast(roomId);
+      if (room) this.scheduleAutoNext(room);
+      return;
     }
+    this.scheduleBots(
+      engine instanceof MahjongEngine
+        ? engine.snapshotFor().matchId
+        : engine.snapshotFor().matchId,
+    );
     this.broadcast(roomId);
+  }
+
+  private maxRoundsOf(room: RoomState): number {
+    if (room.gameType === "mahjong") {
+      return (room.config as MahjongRoomConfig).maxRounds;
+    }
+    return (room.config as TenhalfRoomConfig).maxRounds;
+  }
+
+  private scheduleAutoNext(room: RoomState): void {
+    const max = this.maxRoundsOf(room);
+    if (room.roundIndex >= max) return;
+    setTimeout(() => {
+      const live = this.lobby.get(room.roomId);
+      if (!live || live.phase !== "settled") return;
+      if (live.roundIndex >= this.maxRoundsOf(live)) return;
+      try {
+        this.nextRound(live);
+        this.broadcast(live.roomId);
+      } catch (e) {
+        console.error("[match] auto next failed", e);
+      }
+    }, 4000);
   }
 
   scheduleBots(matchId: string): void {
@@ -144,6 +168,11 @@ export class MatchManager {
     const timer = setTimeout(() => {
       const engine = this.matches.get(matchId);
       if (!engine || engine.isFinished()) return;
+      if (engine instanceof MahjongEngine && engine.tryHumanTimeout()) {
+        this.persist(engine);
+        this.afterAction(engine.snapshotFor().roomId, engine);
+        return;
+      }
       const acted = engine.botAct();
       if (acted) {
         this.persist(engine);
@@ -179,20 +208,16 @@ export class MatchManager {
     this.lobby.backToWaiting(room);
   }
 
-  /** 再来一局（麻将多局） */
+  /** 再来一局：未达总局数则开新局；否则回等待并保留累计分 */
   nextRound(room: RoomState): AnyEngine | null {
-    if (room.gameType !== "mahjong") {
+    const max = this.maxRoundsOf(room);
+    if (room.roundIndex >= max) {
       this.returnToLobby(room.roomId);
       return null;
     }
-    const cfg = room.config as MahjongRoomConfig;
-    if (room.roundIndex >= cfg.maxRounds) {
-      this.returnToLobby(room.roomId);
-      return null;
-    }
-    // 清掉旧 match，保留房间分数与 roundIndex
-    const oldId = this.byRoom.get(room.roomId);
+
     let dealer: number | undefined;
+    const oldId = this.byRoom.get(room.roomId);
     if (oldId) {
       const old = this.matches.get(oldId);
       if (old instanceof MahjongEngine) {
@@ -201,7 +226,14 @@ export class MatchManager {
       this.clearBotTimer(oldId);
       this.matches.delete(oldId);
       this.store.deleteMatch(oldId);
+      this.byRoom.delete(room.roomId);
     }
+
+    if (room.gameType === "tenhalf") {
+      return this.start(room);
+    }
+
+    const cfg = room.config as MahjongRoomConfig;
     const matchId = randomUUID();
     const seats = room.seats
       .filter((s) => s.userId)
@@ -227,5 +259,14 @@ export class MatchManager {
     this.persist(engine);
     this.scheduleBots(matchId);
     return engine;
+  }
+
+  private clearOldMatch(roomId: string): void {
+    const matchId = this.byRoom.get(roomId);
+    if (!matchId) return;
+    this.clearBotTimer(matchId);
+    this.matches.delete(matchId);
+    this.store.deleteMatch(matchId);
+    this.byRoom.delete(roomId);
   }
 }

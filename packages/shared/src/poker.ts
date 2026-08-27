@@ -79,7 +79,19 @@ export function buildPokerDeck(): PokerCard[] {
   return cards;
 }
 
+const SUIT_SYMBOL: Record<PokerSuit, string> = {
+  S: "♠",
+  H: "♥",
+  D: "♦",
+  C: "♣",
+};
+
+/** 展示用：符号 + 点数，如 ♠A、♥10、♦K */
 export function pokerLabel(c: PokerCard): string {
   const ranks = ["", "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
-  return `${c.suit}${ranks[c.rank]}`;
+  return `${SUIT_SYMBOL[c.suit]}${ranks[c.rank]}`;
+}
+
+export function isRedSuit(suit: PokerSuit): boolean {
+  return suit === "H" || suit === "D";
 }
