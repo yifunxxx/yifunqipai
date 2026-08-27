@@ -265,28 +265,11 @@ pnpm test
 pnpm typecheck
 ```
 
-## What GitHub is for
-
-| Capability | Supported? |
-|------------|------------|
-| Source, issues, PRs | Yes |
-| Actions CI (`.github/workflows/ci.yml`) | Yes |
-| Hosting the game server | **No** |
-
 ## Rules (short)
 
 **Shaanxi mahjong:** 112 tiles (characters/dots/bamboo + red dragons, not wild) or 144; pong/kong/hu, no chow; kongs settle immediately; dealer extras; winner becomes dealer, draw keeps dealer.
 
 **Ten-and-a-half:** A=1, J/Q/K=0.5; five dragons beat 10.5; free-for-all or banker vs players.
-
-## Publish the client to npm
-
-Package: `@yifunxxx/qipai-cli`. Shared code is bundled into the client. Login and publish against the official registry:
-
-```bash
-npm login --registry=https://registry.npmjs.org/
-pnpm --filter @yifunxxx/qipai-cli publish
-```
 
 ## License
 

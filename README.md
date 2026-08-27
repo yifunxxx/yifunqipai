@@ -265,28 +265,11 @@ pnpm test
 pnpm typecheck
 ```
 
-## GitHub 能做什么
-
-| 能力 | 可以？ |
-|------|--------|
-| 源码、Issue、PR | 可以 |
-| Actions 跑测试（`.github/workflows/ci.yml`） | 可以 |
-| 当游戏服 | **不可以** |
-
 ## 玩法摘要
 
 **陕西麻将：** 112（万筒条+红中，非万能）或 144；可碰/杠/胡，不可吃；杠当场结算；庄家相关翻倍；赢家坐庄，流局连庄。
 
 **十点半：** A=1，J/Q/K=0.5；五龙 > 十点半；通比或打庄。
-
-## 发布客户端到 npm
-
-包名 `@yifunxxx/qipai-cli`。shared 已打进客户端包。登录和发布须用官方源：
-
-```bash
-npm login --registry=https://registry.npmjs.org/
-pnpm --filter @yifunxxx/qipai-cli publish
-```
 
 ## 许可
 
