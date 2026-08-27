@@ -6,8 +6,6 @@ Play Shaanxi mahjong and “ten-and-a-half” in a terminal: a WebSocket server 
 
 Players install the client from npm and point it at **your** server.
 
-**GitHub cannot run this server 24/7.** Actions jobs time out; Pages is static only. Use GitHub for source and CI. Run the game process with Docker, a VPS, Fly.io, or similar.
-
 ## Play
 
 Requires Node.js ≥ 20 and a running server.
@@ -249,8 +247,6 @@ On PowerShell, use `` ` `` instead of `\` for line continuation.
 1. Open TCP `8787` (or your mapped host port) in the firewall / security group.
 2. Clients use `ws://PUBLIC_IP:8787`.
 3. For HTTPS, put Nginx or Caddy in front and use `wss://DOMAIN` (proxy must support WebSocket Upgrade).
-
-GitHub Actions and GitHub Pages **cannot** replace this container.
 
 ### 7. Image notes
 

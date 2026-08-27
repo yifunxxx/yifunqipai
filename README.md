@@ -6,8 +6,6 @@
 
 玩家用 npm 安装客户端，连到你部署的服务器即可。
 
-**GitHub 不能 24 小时跑这个服务端。** Actions 会超时结束，Pages 只能放静态页。GitHub 适合放代码、跑 CI；对局长驻进程请用 Docker / VPS / Fly.io 等。
-
 ## 玩家怎么用
 
 需要 Node.js ≥ 20，以及一个已经启动的服务端。
@@ -249,8 +247,6 @@ bash 把 `` ` `` 换成 `\`。
 1. 安全组、防火墙放行 TCP `8787`（或你映射的宿主机端口）。
 2. 客户端填写 `ws://公网IP:8787`。
 3. 若用 Nginx/Caddy 做 HTTPS，客户端改用 `wss://域名`，反代必须支持 WebSocket（Upgrade）。
-
-GitHub Actions / GitHub Pages **不能**替代上述容器。
 
 ### 7. Docker 构建说明
 
