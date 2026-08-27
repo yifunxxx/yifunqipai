@@ -40,3 +40,6 @@ docker-data/
 
 # Pack artifacts
 *.tgz
+
+# npm lockfile (this repo uses pnpm)
+package-lock.json
