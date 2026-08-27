@@ -9,7 +9,7 @@
     "dev": "node --experimental-sqlite --import tsx src/index.ts",
     "start": "node --experimental-sqlite dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/**/*.test.ts || exit 0"
+    "test": "node --experimental-sqlite --import tsx --test src/lobby/lobby-service.test.ts"
   },
   "dependencies": {
     "@yifun/qipai-shared": "workspace:*",

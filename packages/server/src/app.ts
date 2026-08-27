@@ -131,6 +131,11 @@ export function createApp(opts: {
   function handle(ws: WebSocket, ctx: ClientCtx, msg: Envelope): void {
     const { type, requestId, payload } = msg;
 
+    if (type === "sys.ping") {
+      send(ws, "sys.pong", { ts: Date.now() }, requestId);
+      return;
+    }
+
     if (type === "auth.login") {
       const p = payload as AuthLoginPayload;
       const ok = sessions.login(p.username ?? "游客");
@@ -187,10 +192,16 @@ export function createApp(opts: {
       case "room.leave": {
         if (!ctx.roomId) break;
         const rid = ctx.roomId;
-        lobby.leave(rid, ctx.userId!);
+        const uid = ctx.userId!;
+        const remaining = lobby.leave(rid, uid);
         ctx.roomId = undefined;
         send(ws, "room.left", { roomId: rid }, requestId);
-        broadcastRoom(rid);
+        if (!remaining) {
+          matches.abandon(rid);
+        } else {
+          matches.convertHumanToBot(rid, uid);
+          broadcastRoom(rid);
+        }
         break;
       }
       case "room.ready": {
@@ -301,7 +312,10 @@ export function createApp(opts: {
   function resumeRoom(ws: WebSocket, ctx: ClientCtx): void {
     if (!ctx.userId) return;
     const room = lobby.findRoomByUser(ctx.userId);
-    if (!room) return;
+    if (!room) {
+      send(ws, "room.left", { roomId: "" });
+      return;
+    }
     ctx.roomId = room.roomId;
     send(ws, "room.update", lobby.toSummary(room));
     const engine = matches.getByRoom(room.roomId);

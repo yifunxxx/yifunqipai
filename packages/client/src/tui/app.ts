@@ -30,6 +30,7 @@ type ScreenMode = "login" | "lobby" | "room" | "mahjong" | "tenhalf";
 interface AppState {
   mode: ScreenMode;
   username: string;
+  userId?: string;
   rooms: RoomSummary[];
   room?: RoomSummary;
   game?: Record<string, unknown>;
@@ -131,6 +132,18 @@ export async function runTui(client: QipaiClient): Promise<void> {
   function setStatus(s: string): void {
     state.status = s;
     render();
+  }
+
+  function enterLobby(refreshRooms = true): void {
+    state.room = undefined;
+    state.game = undefined;
+    state.mode = "lobby";
+    lastSeenLog = undefined;
+    lastMatchId = undefined;
+    lastJustDrewId = undefined;
+    mjFx = null;
+    board.hideFx();
+    if (refreshRooms) client.send("lobby.listRooms", {});
   }
 
   function maxRoundsOf(room?: RoomSummary): number {
@@ -609,6 +622,28 @@ export async function runTui(client: QipaiClient): Promise<void> {
     screen.render();
   }
 
+  let lastDroppedLogAt = 0;
+  client.onDropped(() => {
+    const now = Date.now();
+    if (now - lastDroppedLogAt < 1500) return;
+    lastDroppedLogAt = now;
+    log("尚未连上服务器，正在重连…");
+  });
+
+  client.onStatus((s, detail) => {
+    if (s === "reconnecting") {
+      setStatus(`连接断开，正在重连${detail ? ` (${detail})` : ""}…`);
+      log("连接断开，正在重连");
+      return;
+    }
+    if (s === "open") {
+      setStatus("已连接");
+      log("已重新连上服务器");
+      if (cfg.sessionToken) client.send("auth.hello", { sessionToken: cfg.sessionToken });
+      else if (state.mode === "lobby") client.send("lobby.listRooms", {});
+    }
+  });
+
   client.on("sys.error", (env) => {
     const p = env.payload as { message?: string; code?: string };
     log(`错误[${p.code}]: ${p.message}`);
@@ -619,15 +654,18 @@ export async function runTui(client: QipaiClient): Promise<void> {
     const p = env.payload as { reason?: string };
     log(`被顶号: ${p.reason}`);
     setStatus("被顶号");
+    client.close();
   });
 
   client.on("auth.ok", (env) => {
     const p = env.payload as {
       sessionToken: string;
+      userId: string;
       username: string;
       expiresAt: number;
     };
     state.username = p.username;
+    state.userId = p.userId;
     cfg.sessionToken = p.sessionToken;
     cfg.username = p.username;
     saveConfig(cfg);
@@ -647,6 +685,14 @@ export async function runTui(client: QipaiClient): Promise<void> {
 
   client.on("room.update", (env) => {
     const room = env.payload as RoomSummary;
+    if (
+      state.userId &&
+      !room.seats.some((s) => s.userId === state.userId && !s.isBot)
+    ) {
+      enterLobby();
+      render();
+      return;
+    }
     state.room = room;
     if (room.phase === "playing") {
       if (state.mode === "lobby" || state.mode === "login" || state.mode === "room") {
@@ -665,19 +711,12 @@ export async function runTui(client: QipaiClient): Promise<void> {
   });
 
   client.on("room.left", () => {
-    state.room = undefined;
-    state.game = undefined;
-    state.mode = "lobby";
-    lastSeenLog = undefined;
-    lastMatchId = undefined;
-    lastJustDrewId = undefined;
-    mjFx = null;
-    board.hideFx();
-    client.send("lobby.listRooms", {});
+    enterLobby();
     render();
   });
 
   client.on("game.state", (env) => {
+    if (!state.room) return;
     state.game = env.payload as Record<string, unknown>;
     const payload = env.payload as {
       gameType?: string;

@@ -660,7 +660,15 @@ export class MahjongEngine {
     this.drawForCurrent();
   }
 
-  /** 人机一步 */
+  /** 真人中途离开：该座位改由人机接手 */
+  convertHumanToBot(userId: string): boolean {
+    const p = this.s.players.find((x) => x.userId === userId && !x.isBot);
+    if (!p) return false;
+    p.isBot = true;
+    p.connected = true;
+    return true;
+  }
+
   botAct(): boolean {
     const bots = this.s.players.filter((p) => p.isBot);
     for (const bot of bots) {

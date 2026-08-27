@@ -254,11 +254,28 @@ export class LobbyService {
     if (!room) return null;
     const seat = room.seats.find((s) => s.userId === userId && !s.isBot);
     if (!seat) return room;
-    if (room.phase === "playing") {
-      seat.connected = false;
+
+    const otherHumans = room.seats.some((s) => s.userId && !s.isBot && s.userId !== userId);
+
+    if (room.phase === "playing" || room.phase === "settled") {
+      if (!otherHumans) {
+        this.rooms.delete(roomId);
+        this.store.deleteRoom(roomId);
+        return null;
+      }
+      seat.isBot = true;
+      seat.userId = `bot-${room.roomId}-${seat.seat}`;
+      seat.username = `人机${seat.seat + 1}`;
+      seat.ready = true;
+      seat.connected = true;
+      if (room.hostUserId === userId) {
+        const next = room.seats.find((s) => s.userId && !s.isBot);
+        if (next?.userId) room.hostUserId = next.userId;
+      }
       this.persist(room);
       return room;
     }
+
     seat.userId = null;
     seat.username = "";
     seat.ready = false;

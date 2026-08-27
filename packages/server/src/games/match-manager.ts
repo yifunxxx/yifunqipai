@@ -93,6 +93,24 @@ export class MatchManager {
     return this.matches.get(matchId);
   }
 
+  /** 房间已解散：停人机计时并丢掉对局 */
+  abandon(roomId: string): void {
+    this.clearOldMatch(roomId);
+  }
+
+  /** 对局中真人离开，座位改人机并继续 */
+  convertHumanToBot(roomId: string, userId: string): void {
+    const engine = this.getByRoom(roomId);
+    if (!engine) return;
+    if (!engine.convertHumanToBot(userId)) return;
+    this.persist(engine);
+    this.scheduleBots(
+      engine instanceof MahjongEngine
+        ? engine.snapshotFor().matchId
+        : engine.snapshotFor().matchId,
+    );
+  }
+
   persist(engine: AnyEngine): void {
     const snap =
       engine instanceof MahjongEngine

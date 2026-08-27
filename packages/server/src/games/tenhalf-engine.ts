@@ -490,6 +490,15 @@ export class TenhalfEngine {
     this.s.phase = "settled";
   }
 
+  /** 真人中途离开：该座位改由人机接手 */
+  convertHumanToBot(userId: string): boolean {
+    const p = this.s.players.find((x) => x.userId === userId && !x.isBot);
+    if (!p) return false;
+    p.isBot = true;
+    p.connected = true;
+    return true;
+  }
+
   botAct(): boolean {
     if (this.s.phase === "draw_tie") return false;
     if (this.s.autoFinishActive && this.s.phase === "reveal_auto") return false;
