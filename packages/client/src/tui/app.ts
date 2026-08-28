@@ -43,20 +43,6 @@ function displayWidth(text: string): number {
   return w;
 }
 
-function commonPrefix(items: string[]): string {
-  if (!items.length) return "";
-  let prefix = items[0]!;
-  for (const item of items) {
-    let n = 0;
-    while (n < prefix.length && n < item.length && prefix[n]!.toLowerCase() === item[n]!.toLowerCase()) {
-      n++;
-    }
-    prefix = prefix.slice(0, n);
-    if (!prefix) break;
-  }
-  return prefix;
-}
-
 interface AppState {
   mode: ScreenMode;
   username: string;
@@ -852,13 +838,13 @@ export async function runTui(client: QipaiClient): Promise<void> {
         "  2) 创建十点半通比房（3人机）",
         "  3) 创建十点半打庄房（1人机）",
         "  r) 刷新房间列表",
-        "  j) 加入房间（输入房间ID，Tab 补全）",
+        "  j) 加入房间（输入6位房间号）",
         "",
         "房间列表:",
         ...lines,
       ].join("\n"),
     );
-    footer.setContent("大厅: 1/2/3创建  j加入(Tab补全)  r刷新  o退出登录  q退出");
+    footer.setContent("大厅: 1/2/3创建  j加入  r刷新  o退出登录  q退出");
   }
 
   function renderRoom(): void {
@@ -1194,7 +1180,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     render();
   }
 
-  function prompt(label: string, opts?: { complete?: () => string[] }): Promise<string | null> {
+  function prompt(label: string): Promise<string | null> {
     return new Promise((resolve) => {
       if (chatting) endChat();
       prompting = true;
@@ -1213,71 +1199,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
       input.focus();
       screen.render();
 
-      let tabIndex = 0;
-      let tabBase = "";
-      let tabBusy = false;
-
-      const applyComplete = (val: string) => {
-        const clean = val.replace(/\t/g, "");
-        input.setValue(clean);
-        input.focus();
-        screen.render();
-        setImmediate(() => {
-          input.setValue(String(input.getValue() ?? "").replace(/\t/g, "") || clean);
-          input.focus();
-          screen.render();
-        });
-      };
-
-      const onTab = () => {
-        if (tabBusy) return;
-        tabBusy = true;
-        setImmediate(() => {
-          tabBusy = false;
-        });
-        const ids = opts?.complete?.() ?? [];
-        if (!ids.length) {
-          applyComplete(String(input.getValue() ?? "").replace(/\t/g, ""));
-          log("暂无房间可补全，先按 r 刷新列表");
-          return;
-        }
-        const cur = String(input.getValue() ?? "").replace(/\t/g, "").trim();
-        const asNum = Number(cur);
-        if (cur !== "" && Number.isInteger(asNum) && asNum >= 1 && asNum <= ids.length) {
-          applyComplete(ids[asNum - 1]!);
-          return;
-        }
-        if (!ids.includes(cur)) {
-          tabBase = cur;
-          tabIndex = 0;
-        }
-        const matches = ids.filter((id) => id.toLowerCase().startsWith(tabBase.toLowerCase()));
-        const pool = matches.length ? matches : ids;
-        if (tabIndex === 0 && pool.length > 1 && !tabBase) {
-          const shared = commonPrefix(pool);
-          if (shared) {
-            tabBase = shared;
-            applyComplete(shared);
-            log(`房间: ${pool.join("  ")}  （再按 Tab 循环）`);
-            return;
-          }
-        }
-        const pick = pool[tabIndex % pool.length]!;
-        tabIndex = (tabIndex + 1) % pool.length;
-        applyComplete(pick);
-        if (pool.length > 1) log(`补全 ${pick}  (${pool.length} 个匹配，Tab 切换)`);
-      };
-
-      if (opts?.complete) {
-        input.key("tab", onTab);
-        screen.key("tab", onTab);
-      }
-
       const finish = (val: string | null) => {
-        if (opts?.complete) {
-          input.unkey("tab", onTab);
-          screen.unkey("tab", onTab);
-        }
         setInputGrab(false);
         input.hide();
         promptLabel.hide();
@@ -1659,9 +1581,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
   bindKey(["j"], async () => {
     if (scrollScoreModal(1)) return;
     if (state.mode !== "lobby") return;
-    const id = await prompt("房间ID: ", {
-      complete: () => state.rooms.map((r) => r.roomId),
-    });
+    const id = await prompt("房间号: ");
     if (id) client.send("room.join", { roomId: id });
   });
 

@@ -166,3 +166,19 @@ describe("host kick", () => {
     }
   });
 });
+
+describe("lobby create", () => {
+  it("assigns a unique 6-digit room id", () => {
+    const { lobby, cleanup } = tmpLobby();
+    try {
+      const a = lobby.create("u1", "host", "mahjong", undefined, { botCount: 0 });
+      const b = lobby.create("u2", "host2", "mahjong", undefined, { botCount: 0 });
+      assert.match(a.roomId, /^\d{6}$/);
+      assert.match(b.roomId, /^\d{6}$/);
+      assert.notEqual(a.roomId, b.roomId);
+      assert.ok(Number(a.roomId) >= 100000);
+    } finally {
+      cleanup();
+    }
+  });
+});

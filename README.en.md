@@ -28,7 +28,7 @@ Log in with a display name (names need not be unique; identity is the session). 
 
 | Context | Keys |
 |---------|------|
-| Lobby | `1` mahjong vs 3 bots / `2` ten-and-a-half free-for-all / `3` banker mode / `j` join (Tab completes room id) / `r` refresh / `o` log out |
+| Lobby | `1` mahjong vs 3 bots / `2` ten-and-a-half free-for-all / `3` banker mode / `j` join (6-digit room id) / `r` refresh / `o` log out |
 | Room | `c` config / `y` `u` ready / `b` add bot / `d` remove bot / `t` transfer host / `k` kick / `s` start / `Enter` chat / `l` leave / `o` log out |
 | Mahjong | `←` `→` select, Space lock then discard; `p` pong `g` meld kong `h` hu `a` concealed kong `b` add kong `n` pass; `Enter` chat `Esc` leave chat |
 | Ten-and-a-half | `h` hit `s` stand; `Enter` chat `Esc` leave chat |

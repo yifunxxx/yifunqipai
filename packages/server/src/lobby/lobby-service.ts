@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomInt } from "node:crypto";
 import type {
   GameType,
   MahjongRoomConfig,
@@ -90,6 +90,15 @@ export class LobbyService {
     };
   }
 
+  /** 100000–999999，避免首位为 0，方便口播和输入 */
+  private allocRoomId(): string {
+    for (let i = 0; i < 64; i++) {
+      const id = String(randomInt(100000, 1000000));
+      if (!this.rooms.has(id)) return id;
+    }
+    throw Object.assign(new Error("房间号已满，请稍后重试"), { code: "ROOM_ID_EXHAUSTED" });
+  }
+
   create(
     hostUserId: string,
     hostUsername: string,
@@ -97,7 +106,7 @@ export class LobbyService {
     name: string | undefined,
     configPartial: Partial<RoomConfig>,
   ): RoomState {
-    const roomId = randomUUID().slice(0, 8);
+    const roomId = this.allocRoomId();
     let maxSeats = 4;
     let config: RoomConfig;
     if (gameType === "mahjong") {
@@ -263,7 +272,7 @@ export class LobbyService {
   }
 
   join(roomId: string, userId: string, username: string): RoomState {
-    const room = this.rooms.get(roomId);
+    const room = this.rooms.get(roomId.trim());
     if (!room) throw Object.assign(new Error("房间不存在"), { code: "ROOM_NOT_FOUND" });
     if (room.phase !== "waiting") {
       // 重连：已在座位上
