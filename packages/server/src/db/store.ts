@@ -96,6 +96,22 @@ export class Store {
       .run(connectionId, userId);
   }
 
+  touchSession(userId: string, expiresAt: number): void {
+    this.db
+      .prepare(`UPDATE sessions SET expires_at = ? WHERE user_id = ?`)
+      .run(expiresAt, userId);
+  }
+
+  listExpiredSessions(now: number): SessionRow[] {
+    return this.db
+      .prepare(`SELECT * FROM sessions WHERE expires_at < ?`)
+      .all(now) as unknown as SessionRow[];
+  }
+
+  deleteSession(userId: string): void {
+    this.db.prepare(`DELETE FROM sessions WHERE user_id = ?`).run(userId);
+  }
+
   saveRoom(roomId: string, data: unknown): void {
     this.db
       .prepare(

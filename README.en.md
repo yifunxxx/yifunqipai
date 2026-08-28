@@ -4,7 +4,7 @@
 
 Play Shaanxi mahjong and “ten-and-a-half” in a terminal: a WebSocket server plus the TUI client `yifunqipai`.
 
-Players install the client from npm and point it at **your** server. Current npm package `@yifunxxx/qipai-cli` version: **0.1.4**.
+Players install the client from npm and point it at **your** server. Current npm package `@yifunxxx/qipai-cli` version: **0.1.5**.
 
 ## Play
 
@@ -24,12 +24,12 @@ npm i -g @yifunxxx/qipai-cli@latest
 
 Use `wss://YOUR_DOMAIN` behind HTTPS. Optional: `yifunqipai config set username NICK`. Config file: `~/.yifunqipai/config.json`.
 
-Log in with a display name (names need not be unique; identity is the session). A new connection for the same session kicks the old one.
+Log in with a display name (names need not be unique; identity is the session). A new connection for the same session kicks the old one. Press `o` in the lobby to log out and enter a new name. After 24 hours with no activity (including keepalive), the session is deleted and rooms it hosted are dissolved.
 
 | Context | Keys |
 |---------|------|
-| Lobby | `1` mahjong vs 3 bots / `2` ten-and-a-half free-for-all / `3` banker mode / `j` join / `r` refresh |
-| Room | `c` config / `y` `u` ready / `b` add bot / `d` remove bot / `t` transfer host / `s` start / `l` leave |
+| Lobby | `1` mahjong vs 3 bots / `2` ten-and-a-half free-for-all / `3` banker mode / `j` join / `r` refresh / `o` log out |
+| Room | `c` config / `y` `u` ready / `b` add bot / `d` remove bot / `t` transfer host / `k` kick / `s` start / `l` leave / `o` log out |
 | Mahjong | `←` `→` select, Space lock then discard; `p` pong `g` meld kong `h` hu `a` concealed kong `b` add kong `n` pass |
 | Ten-and-a-half | `h` hit `s` stand |
 | Always | `q` quit |
@@ -115,7 +115,7 @@ See `.env.example`. The process reads the environment; it does not auto-load a `
 |----------|---------|---------|
 | `PORT` | `8787` | HTTP + WebSocket listen port |
 | `DATA_DIR` | `./data` | Directory for `qipai.db` |
-| `SESSION_TTL_MS` | `86400000` | Login session TTL (24h) |
+| `SESSION_TTL_MS` | `86400000` | Idle session timeout: delete the session and rooms it hosted after 24h with no activity |
 
 PowerShell:
 

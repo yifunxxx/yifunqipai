@@ -34,15 +34,20 @@ export class SessionService {
     };
   }
 
+  getByToken(sessionToken: string): SessionRow | undefined {
+    return this.store.getSessionByToken(sessionToken);
+  }
+
   hello(sessionToken: string): AuthOkPayload | null {
     const row = this.store.getSessionByToken(sessionToken);
     if (!row) return null;
     if (row.expires_at < Date.now()) return null;
+    const expiresAt = this.touch(row.user_id);
     return {
       sessionToken: row.session_token,
       userId: row.user_id,
       username: row.username,
-      expiresAt: row.expires_at,
+      expiresAt,
     };
   }
 
@@ -53,6 +58,21 @@ export class SessionService {
       throw Object.assign(new Error("会话已过期，请重新登录"), { code: "AUTH_EXPIRED" });
     }
     return row;
+  }
+
+  /** 滑动过期：有活动则把过期时间推到 now + TTL */
+  touch(userId: string): number {
+    const expiresAt = Date.now() + this.ttlMs;
+    this.store.touchSession(userId, expiresAt);
+    return expiresAt;
+  }
+
+  listExpired(now = Date.now()): SessionRow[] {
+    return this.store.listExpiredSessions(now);
+  }
+
+  delete(userId: string): void {
+    this.store.deleteSession(userId);
   }
 
   bindConnection(userId: string, connectionId: string): string | null {

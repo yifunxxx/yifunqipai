@@ -224,6 +224,44 @@ export class LobbyService {
     return room;
   }
 
+  roomsHostedBy(userId: string): RoomState[] {
+    return [...this.rooms.values()].filter((r) => r.hostUserId === userId);
+  }
+
+  dissolve(roomId: string): RoomState | undefined {
+    const room = this.rooms.get(roomId);
+    if (!room) return undefined;
+    this.rooms.delete(roomId);
+    this.store.deleteRoom(roomId);
+    return room;
+  }
+
+  /** 房主踢人：走 leave 同一套座位/房主/对局中转人机逻辑 */
+  kick(
+    roomId: string,
+    hostUserId: string,
+    seat: number,
+  ): { remaining: RoomState | null; kickedUserId: string } {
+    const room = this.rooms.get(roomId);
+    if (!room) throw Object.assign(new Error("房间不存在"), { code: "ROOM_NOT_FOUND" });
+    if (room.hostUserId !== hostUserId) {
+      throw Object.assign(new Error("仅房主可踢人"), { code: "NOT_HOST" });
+    }
+    const target = room.seats.find((s) => s.seat === seat);
+    if (!target?.userId) {
+      throw Object.assign(new Error("该座位没有玩家"), { code: "EMPTY_SEAT" });
+    }
+    if (target.isBot) {
+      throw Object.assign(new Error("人机请用移除人机"), { code: "NOT_HUMAN" });
+    }
+    if (target.userId === hostUserId) {
+      throw Object.assign(new Error("不能踢出自己"), { code: "KICK_SELF" });
+    }
+    const kickedUserId = target.userId;
+    const remaining = this.leave(roomId, kickedUserId);
+    return { remaining, kickedUserId };
+  }
+
   join(roomId: string, userId: string, username: string): RoomState {
     const room = this.rooms.get(roomId);
     if (!room) throw Object.assign(new Error("房间不存在"), { code: "ROOM_NOT_FOUND" });

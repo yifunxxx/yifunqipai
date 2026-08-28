@@ -114,6 +114,16 @@ export interface RoomSetHostPayload {
   seat: number;
 }
 
+export interface RoomKickPayload {
+  /** 目标座位号（须为真人玩家，不能是自己） */
+  seat: number;
+}
+
+export interface RoomKickedPayload {
+  roomId: string;
+  reason: string;
+}
+
 export interface RoomUpdateConfigPayload {
   config: Partial<RoomConfig>;
 }

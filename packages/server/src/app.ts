@@ -11,6 +11,7 @@ import {
   type RoomAddBotPayload,
   type RoomRemoveBotPayload,
   type RoomSetHostPayload,
+  type RoomKickPayload,
   type RoomUpdateConfigPayload,
   type AuthLoginPayload,
   type AuthHelloPayload,
@@ -49,6 +50,7 @@ export function createApp(opts: {
 
   const connections = new Map<string, WebSocket>();
   const ctxByWs = new WeakMap<WebSocket, ClientCtx>();
+  const SWEEP_MS = 60_000;
 
   const broadcastRoom = (roomId: string): void => {
     const room = lobby.get(roomId);
@@ -125,7 +127,15 @@ export function createApp(opts: {
     if (!ctx.sessionToken || !ctx.userId) {
       throw Object.assign(new Error("未登录"), { code: "AUTH_REQUIRED" });
     }
-    sessions.requireValid(ctx.sessionToken);
+    try {
+      sessions.requireValid(ctx.sessionToken);
+    } catch (e) {
+      const ex = e as Error & { code?: string };
+      if (ex.code === "AUTH_EXPIRED" || ex.code === "AUTH_INVALID") {
+        purgeUser(ctx.userId, "会话已过期");
+      }
+      throw e;
+    }
   }
 
   function handle(ws: WebSocket, ctx: ClientCtx, msg: Envelope): void {
@@ -133,6 +143,17 @@ export function createApp(opts: {
 
     if (type === "sys.ping") {
       send(ws, "sys.pong", { ts: Date.now() }, requestId);
+      if (ctx.sessionToken && ctx.userId) {
+        try {
+          sessions.requireValid(ctx.sessionToken);
+          sessions.touch(ctx.userId);
+        } catch (e) {
+          const ex = e as Error & { code?: string };
+          if (ex.code === "AUTH_EXPIRED" || ex.code === "AUTH_INVALID") {
+            purgeUser(ctx.userId, "会话已过期");
+          }
+        }
+      }
       return;
     }
 
@@ -147,8 +168,10 @@ export function createApp(opts: {
 
     if (type === "auth.hello") {
       const p = payload as AuthHelloPayload;
+      const row = sessions.getByToken(p.sessionToken);
       const ok = sessions.hello(p.sessionToken);
       if (!ok) {
+        if (row) purgeUser(row.user_id, "会话已过期");
         err(ws, "AUTH_INVALID", "会话无效或过期", requestId);
         return;
       }
@@ -159,6 +182,7 @@ export function createApp(opts: {
     }
 
     requireAuth(ctx, requestId);
+    sessions.touch(ctx.userId!);
 
     switch (type) {
       case "lobby.listGames":
@@ -237,6 +261,40 @@ export function createApp(opts: {
         }
         const room = lobby.setHost(ctx.roomId, ctx.userId!, p.seat);
         broadcastRoom(room.roomId);
+        break;
+      }
+      case "room.kick": {
+        const p = payload as RoomKickPayload;
+        if (!ctx.roomId) throw Object.assign(new Error("不在房间"), { code: "NOT_IN_ROOM" });
+        if (typeof p?.seat !== "number") {
+          throw Object.assign(new Error("请指定座位号"), { code: "BAD_REQUEST" });
+        }
+        const rid = ctx.roomId;
+        const { remaining, kickedUserId } = lobby.kick(rid, ctx.userId!, p.seat);
+        const kickedWs = findWsByUserId(kickedUserId);
+        if (kickedWs) {
+          const kctx = ctxByWs.get(kickedWs);
+          if (kctx) kctx.roomId = undefined;
+          send(kickedWs, "room.kicked", { roomId: rid, reason: "房主将你移出房间" });
+          send(kickedWs, "room.left", { roomId: rid });
+        }
+        if (!remaining) {
+          matches.abandon(rid);
+        } else {
+          matches.convertHumanToBot(rid, kickedUserId);
+          broadcastRoom(rid);
+        }
+        break;
+      }
+      case "auth.logout": {
+        const uid = ctx.userId!;
+        purgeUser(uid, "已退出登录", { notifySelf: false });
+        const raw: ClientCtx = ctx;
+        raw.userId = undefined;
+        raw.username = undefined;
+        raw.sessionToken = undefined;
+        raw.roomId = undefined;
+        send(ws, "auth.loggedOut", {}, requestId);
         break;
       }
       case "room.updateConfig": {
@@ -332,10 +390,82 @@ export function createApp(opts: {
     }
   }
 
+  function findWsByUserId(userId: string): WebSocket | undefined {
+    const row = opts.store.getSessionByUserId(userId);
+    if (row?.connection_id) {
+      const ws = connections.get(row.connection_id);
+      if (ws) return ws;
+    }
+    for (const [, ws] of connections) {
+      if (ctxByWs.get(ws)?.userId === userId) return ws;
+    }
+    return undefined;
+  }
+
+  function notifyRoomGone(
+    room: { roomId: string; seats: Array<{ userId: string | null; isBot: boolean }> },
+    exceptUserId?: string,
+  ): void {
+    for (const seat of room.seats) {
+      if (!seat.userId || seat.isBot) continue;
+      if (exceptUserId && seat.userId === exceptUserId) continue;
+      const occWs = findWsByUserId(seat.userId);
+      if (!occWs) continue;
+      const occCtx = ctxByWs.get(occWs);
+      if (occCtx) occCtx.roomId = undefined;
+      send(occWs, "room.left", { roomId: room.roomId });
+    }
+  }
+
+  function purgeUser(
+    userId: string,
+    reason: string,
+    options?: { notifySelf?: boolean },
+  ): void {
+    const notifySelf = options?.notifySelf !== false;
+    for (const room of lobby.roomsHostedBy(userId)) {
+      notifyRoomGone(room, userId);
+      matches.abandon(room.roomId);
+      lobby.dissolve(room.roomId);
+    }
+    const guestRoom = lobby.findRoomByUser(userId);
+    if (guestRoom) {
+      const rid = guestRoom.roomId;
+      const remaining = lobby.leave(rid, userId);
+      if (!remaining) matches.abandon(rid);
+      else {
+        matches.convertHumanToBot(rid, userId);
+        broadcastRoom(rid);
+      }
+    }
+    const selfWs = findWsByUserId(userId);
+    if (selfWs) {
+      const selfCtx = ctxByWs.get(selfWs);
+      if (selfCtx) {
+        selfCtx.userId = undefined;
+        selfCtx.username = undefined;
+        selfCtx.sessionToken = undefined;
+        selfCtx.roomId = undefined;
+      }
+      if (notifySelf) send(selfWs, "sys.kicked", { reason });
+    }
+    sessions.delete(userId);
+  }
+
+  function sweepExpired(): void {
+    for (const row of sessions.listExpired()) {
+      purgeUser(row.user_id, "会话已过期");
+    }
+  }
+
+  sweepExpired();
+  const sweepTimer = setInterval(sweepExpired, SWEEP_MS);
+
   return {
     server,
     wss,
     close: () => {
+      clearInterval(sweepTimer);
       wss.close();
       server.close();
     },

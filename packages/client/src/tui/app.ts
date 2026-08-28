@@ -32,6 +32,17 @@ import {
 
 type ScreenMode = "login" | "lobby" | "room" | "mahjong" | "tenhalf";
 
+/** 终端列宽：ASCII 1 列，其余按 2 列（中文标签） */
+function displayWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f)) continue;
+    w += cp <= 0x7e ? 1 : 2;
+  }
+  return w;
+}
+
 interface AppState {
   mode: ScreenMode;
   username: string;
@@ -154,15 +165,30 @@ export async function runTui(client: QipaiClient): Promise<void> {
     content: "",
   });
 
+  const promptLabel = blessed.box({
+    parent: screen,
+    bottom: 1,
+    left: 2,
+    height: 1,
+    width: 8,
+    hidden: true,
+    tags: false,
+    content: "",
+    style: { fg: "cyan" },
+  });
+
   const input = blessed.textbox({
     parent: screen,
-    bottom: 0,
-    left: 1,
+    bottom: 1,
+    left: 10,
     height: 1,
-    width: "100%-4",
+    width: "100%-12",
     inputOnFocus: true,
+    keys: true,
     hidden: true,
   });
+
+  let prompting = false;
 
   function log(msg: string): void {
     logBox.log(msg);
@@ -276,7 +302,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
 
   function renderHeader(): void {
     header.setContent(
-      ` {bold}${state.username || "未登录"}{/bold}  |  ${state.status}  |  q退出  Esc取消输入`,
+      ` {bold}${state.username || "未登录"}{/bold}  |  ${state.status}  |  o退出登录  q退出  Esc取消输入`,
     );
   }
 
@@ -753,7 +779,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
         ...lines,
       ].join("\n"),
     );
-    footer.setContent("大厅: 1/2/3创建  j加入  r刷新  q退出");
+    footer.setContent("大厅: 1/2/3创建  j加入  r刷新  o退出登录  q退出");
   }
 
   function renderRoom(): void {
@@ -800,14 +826,14 @@ export async function runTui(client: QipaiClient): Promise<void> {
           : hasScores
             ? "按 v 可查看上一场积分  |  等待中可按 {yellow-fg}c{/} 配置玩法"
             : "提示: 等待中可按 {yellow-fg}c{/} 配置玩法（局数/牌数/锅底等）",
-        "y准备  u取消准备  b加人机  d移除人机  t转让房主  c配置",
-        "s开始  n续局/统分后回等待  x回等待  l离开",
+        "y准备  u取消准备  b加人机  d移除人机  t转让房主  k踢人  c配置",
+        "s开始  n续局/统分后回等待  x回等待  l离开  o退出登录",
       ].join("\n"),
     );
     footer.setContent(
       hasScores
-        ? "房间: v积分  c配置  y/u准备  b/d人机  t房主  s开始  l离开"
-        : "房间: c配置  y/u准备  b/d人机  t房主  s开始  l离开",
+        ? "房间: v积分  c配置  y/u准备  b/d人机  t房主  k踢人  s开始  l离开  o登出"
+        : "房间: c配置  y/u准备  b/d人机  t房主  k踢人  s开始  l离开  o登出",
     );
   }
 
@@ -823,7 +849,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
         `服务器: ${cfg.serverUrl}`,
       ].join("\n"),
     );
-    footer.setContent("登录: Enter 输入用户名");
+    footer.setContent("登录: Enter 输入用户名   q退出");
   }
 
   function render(): void {
@@ -837,6 +863,12 @@ export async function runTui(client: QipaiClient): Promise<void> {
     if (scoreModalOpen) {
       scoreModal.setFront();
       scoreModal.focus();
+    }
+    if (prompting) {
+      footer.setContent("");
+      promptLabel.setFront();
+      input.setFront();
+      input.focus();
     }
     screen.render();
   }
@@ -859,6 +891,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
       setStatus("已连接");
       log("已重新连上服务器");
       if (cfg.sessionToken) client.send("auth.hello", { sessionToken: cfg.sessionToken });
+      else if (state.mode === "login") setStatus("按 Enter 登录");
       else if (state.mode === "lobby") client.send("lobby.listRooms", {});
     }
   });
@@ -867,13 +900,23 @@ export async function runTui(client: QipaiClient): Promise<void> {
     const p = env.payload as { message?: string; code?: string };
     log(`错误[${p.code}]: ${p.message}`);
     setStatus(p.message ?? "错误");
+    if (p.code === "AUTH_INVALID" || p.code === "AUTH_EXPIRED") {
+      delete cfg.sessionToken;
+      saveConfig(cfg);
+      if (state.mode !== "login") resetToLogin(p.message ?? "请重新登录");
+    }
   });
 
   client.on("sys.kicked", (env) => {
     const p = env.payload as { reason?: string };
-    log(`被顶号: ${p.reason}`);
-    setStatus("被顶号");
-    client.close();
+    delete cfg.sessionToken;
+    saveConfig(cfg);
+    resetToLogin(p.reason ?? "已登出");
+  });
+
+  client.on("room.kicked", (env) => {
+    const p = env.payload as { reason?: string };
+    log(p.reason ?? "被房主移出房间");
   });
 
   client.on("auth.ok", (env) => {
@@ -888,7 +931,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     cfg.sessionToken = p.sessionToken;
     cfg.username = p.username;
     saveConfig(cfg);
-    log(`登录成功，会话至 ${new Date(p.expiresAt).toLocaleString()}`);
+    log(`登录成功，会话空闲 ${Math.round((p.expiresAt - Date.now()) / 3600000)} 小时后过期`);
     if (state.mode === "login") {
       state.mode = "lobby";
       client.send("lobby.listRooms", {});
@@ -962,29 +1005,100 @@ export async function runTui(client: QipaiClient): Promise<void> {
     render();
   });
 
-  function prompt(label: string): Promise<string> {
+  function resetToLogin(reason?: string): void {
+    state.mode = "login";
+    state.userId = undefined;
+    state.username = cfg.username ?? "";
+    state.room = undefined;
+    state.game = undefined;
+    state.rooms = [];
+    lastOccRoomId = undefined;
+    lastOcc = [];
+    lastMatchId = undefined;
+    lastJustDrewId = undefined;
+    lastEventSeq = 0;
+    mjFx = null;
+    board.hideFx();
+    board.hideClaim();
+    closeScoreModal();
+    if (reason) log(reason);
+    setStatus(reason ?? "按 Enter 登录");
+  }
+
+  function prompt(label: string): Promise<string | null> {
     return new Promise((resolve) => {
-      input.setLabel(label);
+      prompting = true;
+      const cols = Math.max(1, displayWidth(label));
+      promptLabel.setContent(label);
+      promptLabel.width = cols;
+      promptLabel.left = 2;
+      promptLabel.show();
+      input.left = 2 + cols;
+      input.width = `100%-${4 + cols}`;
       input.show();
-      input.focus();
       input.setValue("");
+      promptLabel.setFront();
+      input.setFront();
+      input.focus();
       screen.render();
-      input.once("submit", (val: string) => {
+
+      const finish = (val: string | null) => {
         input.hide();
+        promptLabel.hide();
         screen.render();
-        resolve(val.trim());
-      });
+        resolve(val === null ? null : val.trim());
+        setImmediate(() => {
+          prompting = false;
+          render();
+        });
+      };
+
+      const onSubmit = (val: string) => {
+        input.removeListener("cancel", onCancel);
+        finish(val);
+      };
+      const onCancel = () => {
+        input.removeListener("submit", onSubmit);
+        finish(null);
+      };
+      input.once("submit", onSubmit);
+      input.once("cancel", onCancel);
     });
   }
 
   async function doLogin(): Promise<void> {
-    if (cfg.sessionToken) {
-      client.send("auth.hello", { sessionToken: cfg.sessionToken });
-    }
+    if (prompting) return;
     const name = await prompt("用户名: ");
-    if (!name) return;
+    if (!name) {
+      setStatus("按 Enter 登录");
+      return;
+    }
+    delete cfg.sessionToken;
+    saveConfig(cfg);
     state.username = name;
     client.send("auth.login", { username: name });
+  }
+
+  async function doLogout(): Promise<void> {
+    if (prompting || state.mode === "login") return;
+    client.send("auth.logout", {});
+    delete cfg.sessionToken;
+    saveConfig(cfg);
+    resetToLogin("已退出登录");
+    await doLogin();
+  }
+
+  async function doKick(): Promise<void> {
+    if (state.mode !== "room" && state.mode !== "mahjong" && state.mode !== "tenhalf") return;
+    if (!state.room) return;
+    const raw = await prompt("踢出座位号(1起): ");
+    if (raw == null) return;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 1) {
+      log("座位号无效");
+      return;
+    }
+    client.send("room.kick", { seat: n - 1 });
   }
 
   async function configureRoom(): Promise<void> {
@@ -996,8 +1110,11 @@ export async function runTui(client: QipaiClient): Promise<void> {
     if (r.gameType === "mahjong") {
       const cur = r.config as MahjongRoomConfig;
       const tileRaw = await prompt(`牌数 112或144 (当前${cur.tileCount}): `);
+      if (tileRaw == null) return;
       const baseRaw = await prompt(`底分 (当前${cur.baseScore}): `);
+      if (baseRaw == null) return;
       const roundsRaw = await prompt(`总局数 (当前${cur.maxRounds}): `);
+      if (roundsRaw == null) return;
       const patch: Partial<MahjongRoomConfig> = {};
       if (tileRaw === "112" || tileRaw === "144") patch.tileCount = Number(tileRaw) as 112 | 144;
       if (baseRaw && Number.isFinite(Number(baseRaw))) patch.baseScore = Number(baseRaw);
@@ -1008,9 +1125,13 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }
     const cur = r.config as TenhalfRoomConfig;
     const modeRaw = await prompt(`模式 1打庄 2通比 (当前${cur.mode === "banker" ? "打庄" : "通比"}): `);
+    if (modeRaw == null) return;
     const potRaw = await prompt(`每人锅底 (当前${cur.potPerPlayer}): `);
+    if (potRaw == null) return;
     const roundsRaw = await prompt(`总局数 (当前${cur.maxRounds}): `);
+    if (roundsRaw == null) return;
     const maxRaw = await prompt(`人数上限2-6 (当前${cur.maxPlayers}): `);
+    if (maxRaw == null) return;
     const patch: Partial<TenhalfRoomConfig> = {};
     if (modeRaw === "1") patch.mode = "banker";
     if (modeRaw === "2") patch.mode = "free";
@@ -1032,27 +1153,42 @@ export async function runTui(client: QipaiClient): Promise<void> {
     render();
   });
 
-  screen.key(["q", "C-c"], () => {
+  function bindKey(keys: string | string[], handler: () => void | Promise<void>): void {
+    screen.key(keys, () => {
+      if (prompting) return;
+      void handler();
+    });
+  }
+
+  function quitApp(): void {
     clearInterval(pulseTimer);
     if (fxHideTimer) clearTimeout(fxHideTimer);
     client.close();
     process.exit(0);
-  });
+  }
 
-  screen.key(["up", "k"], () => {
+  screen.key(["C-c"], () => quitApp());
+  bindKey(["q"], () => quitApp());
+
+  bindKey(["up"], () => {
     if (scrollScoreModal(-1)) return;
   });
-  screen.key(["down"], () => {
+  bindKey(["k"], () => {
+    if (scrollScoreModal(-1)) return;
+    void doKick();
+  });
+  bindKey(["down"], () => {
     if (scrollScoreModal(1)) return;
   });
-  screen.key(["pageup"], () => {
+  bindKey(["pageup"], () => {
     if (scrollScoreModal(-8)) return;
   });
-  screen.key(["pagedown"], () => {
+  bindKey(["pagedown"], () => {
     if (scrollScoreModal(8)) return;
   });
 
   screen.key(["escape"], () => {
+    if (prompting) return;
     if (scoreModalOpen) {
       closeScoreModal();
       screen.render();
@@ -1064,12 +1200,16 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }
   });
 
-  screen.key(["r"], () => {
+  bindKey(["o"], () => {
+    void doLogout();
+  });
+
+  bindKey(["r"], () => {
     if (state.mode === "lobby") client.send("lobby.listRooms", {});
     else if (state.room) client.send("game.sync", {});
   });
 
-  screen.key(["enter"], async () => {
+  bindKey(["enter"], async () => {
     if (scoreModalOpen) {
       closeScoreModal();
       screen.render();
@@ -1078,14 +1218,14 @@ export async function runTui(client: QipaiClient): Promise<void> {
     if (state.mode === "login") await doLogin();
   });
 
-  screen.key(["left"], () => {
+  bindKey(["left"], () => {
     if (scoreModalOpen) return;
     if (state.mode !== "mahjong") return;
     state.cursor = Math.max(0, state.cursor - 1);
     render();
   });
 
-  screen.key(["right"], () => {
+  bindKey(["right"], () => {
     if (scoreModalOpen) return;
     if (state.mode !== "mahjong") return;
     const hand = (state.game as { selfHand?: unknown[] })?.selfHand ?? [];
@@ -1093,7 +1233,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     render();
   });
 
-  screen.key(["space"], () => {
+  bindKey(["space"], () => {
     if (scoreModalOpen) return;
     if (state.mode !== "mahjong") return;
     const g = state.game as {
@@ -1120,19 +1260,19 @@ export async function runTui(client: QipaiClient): Promise<void> {
     state.lockedTileId = null;
   });
 
-  screen.key(["p"], () => {
+  bindKey(["p"], () => {
     if (state.mode === "mahjong") client.send("game.action", { action: "peng", data: {} });
   });
-  screen.key(["g"], () => {
+  bindKey(["g"], () => {
     if (state.mode === "mahjong") client.send("game.action", { action: "mingGang", data: {} });
   });
-  screen.key(["a"], () => {
+  bindKey(["a"], () => {
     if (state.mode !== "mahjong") return;
     const hand = (state.game as { selfHand?: Array<{ id: string }> })?.selfHand;
     const id = state.lockedTileId ?? hand?.[state.cursor]?.id;
     client.send("game.action", { action: "anGang", data: { tileId: id } });
   });
-  screen.key(["b"], () => {
+  bindKey(["b"], () => {
     if (state.mode === "room") {
       client.send("room.addBot", { count: 1 });
       return;
@@ -1147,15 +1287,16 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }
   });
 
-  screen.key(["c"], () => {
+  bindKey(["c"], () => {
     if (state.mode !== "room") return;
     void configureRoom();
   });
 
-  screen.key(["d"], () => {
+  bindKey(["d"], () => {
     if (state.mode !== "room") return;
     void (async () => {
       const raw = await prompt("移除人机座位号(1起，空=最后一个): ");
+      if (raw == null) return;
       if (!raw) {
         client.send("room.removeBot", {});
         return;
@@ -1169,10 +1310,11 @@ export async function runTui(client: QipaiClient): Promise<void> {
     })();
   });
 
-  screen.key(["t"], () => {
+  bindKey(["t"], () => {
     if (state.mode !== "room") return;
     void (async () => {
       const raw = await prompt("转让房主到座位号(1起): ");
+      if (raw == null) return;
       const n = Number(raw);
       if (!Number.isFinite(n) || n < 1) {
         log("座位号无效");
@@ -1182,7 +1324,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     })();
   });
 
-  screen.key(["n"], () => {
+  bindKey(["n"], () => {
     if (scoreModalOpen) return;
     if (state.mode === "mahjong") {
       const phase = (state.game as { phase?: string } | undefined)?.phase;
@@ -1198,7 +1340,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     if (state.mode === "room") client.send("room.nextRound", {});
   });
 
-  screen.key(["s"], () => {
+  bindKey(["s"], () => {
     if (state.mode === "tenhalf") {
       const phase = (state.game as { phase?: string } | undefined)?.phase;
       if (phase === "settled") return;
@@ -1208,7 +1350,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     if (state.mode === "room") client.send("room.start", {});
   });
 
-  screen.key(["h"], () => {
+  bindKey(["h"], () => {
     if (state.mode === "mahjong") client.send("game.action", { action: "hu", data: {} });
     else if (state.mode === "tenhalf") {
       const phase = (state.game as { phase?: string } | undefined)?.phase;
@@ -1217,7 +1359,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }
   });
 
-  screen.key(["y"], () => {
+  bindKey(["y"], () => {
     if (state.mode === "room") {
       client.send("room.ready", { ready: true });
       return;
@@ -1229,7 +1371,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
       }
     }
   });
-  screen.key(["v"], () => {
+  bindKey(["v"], () => {
     if (scoreModalOpen) {
       closeScoreModal();
       screen.render();
@@ -1239,42 +1381,42 @@ export async function runTui(client: QipaiClient): Promise<void> {
       openScoreModal();
     }
   });
-  screen.key(["u"], () => {
+  bindKey(["u"], () => {
     if (state.mode === "room") client.send("room.ready", { ready: false });
   });
-  screen.key(["l", "e"], () => {
+  bindKey(["l", "e"], () => {
     if (state.mode === "room" || state.mode === "mahjong" || state.mode === "tenhalf") {
       client.send("room.leave", {});
     }
   });
-  screen.key(["x"], () => {
+  bindKey(["x"], () => {
     if (state.mode === "room" || state.mode === "mahjong" || state.mode === "tenhalf") {
       client.send("room.back", {});
     }
   });
 
-  screen.key(["1"], () => {
+  bindKey(["1"], () => {
     if (state.mode !== "lobby") return;
     client.send("room.create", {
       gameType: "mahjong",
       config: { tileCount: 112, baseScore: 1, maxRounds: 4, botCount: 3 },
     });
   });
-  screen.key(["2"], () => {
+  bindKey(["2"], () => {
     if (state.mode !== "lobby") return;
     client.send("room.create", {
       gameType: "tenhalf",
       config: { mode: "free", potPerPlayer: 10, botCount: 3, maxPlayers: 4, maxRounds: 4 },
     });
   });
-  screen.key(["3"], () => {
+  bindKey(["3"], () => {
     if (state.mode !== "lobby") return;
     client.send("room.create", {
       gameType: "tenhalf",
       config: { mode: "banker", potPerPlayer: 10, botCount: 1, maxPlayers: 2, maxRounds: 4 },
     });
   });
-  screen.key(["j"], async () => {
+  bindKey(["j"], async () => {
     if (scrollScoreModal(1)) return;
     if (state.mode !== "lobby") return;
     const id = await prompt("房间ID: ");

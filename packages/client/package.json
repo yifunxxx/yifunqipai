@@ -1,6 +1,6 @@
 {
   "name": "@yifunxxx/qipai-cli",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "终端棋牌大厅客户端：陕西麻将与十点半",
   "type": "module",
   "bin": {

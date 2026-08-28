@@ -97,3 +97,47 @@ describe("match progress", () => {
     }
   });
 });
+
+describe("host kick", () => {
+  it("removes a human guest from a waiting room", () => {
+    const { lobby, cleanup } = tmpLobby();
+    try {
+      const room = lobby.create("u1", "host", "mahjong", undefined, { botCount: 0 });
+      lobby.join(room.roomId, "u2", "p2");
+      const { remaining, kickedUserId } = lobby.kick(room.roomId, "u1", 1);
+      assert.equal(kickedUserId, "u2");
+      assert.ok(remaining);
+      assert.equal(remaining.seats.find((s) => s.userId === "u2"), undefined);
+      assert.equal(remaining.seats.find((s) => s.seat === 1)?.userId, null);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects kicking self, bots, or non-host", () => {
+    const { lobby, cleanup } = tmpLobby();
+    try {
+      const room = lobby.create("u1", "host", "mahjong", undefined, { botCount: 1 });
+      lobby.join(room.roomId, "u2", "p2");
+      assert.throws(() => lobby.kick(room.roomId, "u1", 0), /不能踢出自己/);
+      const botSeat = room.seats.find((s) => s.isBot)!.seat;
+      assert.throws(() => lobby.kick(room.roomId, "u1", botSeat), /人机/);
+      assert.throws(() => lobby.kick(room.roomId, "u2", 0), /仅房主/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("dissolve removes hosted rooms", () => {
+    const { lobby, cleanup } = tmpLobby();
+    try {
+      const room = lobby.create("u1", "host", "tenhalf", undefined, { botCount: 0 });
+      assert.equal(lobby.roomsHostedBy("u1").length, 1);
+      lobby.dissolve(room.roomId);
+      assert.equal(lobby.get(room.roomId), undefined);
+      assert.equal(lobby.roomsHostedBy("u1").length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+});
