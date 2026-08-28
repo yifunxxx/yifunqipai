@@ -16,6 +16,12 @@ yifunqipai config set serverUrl ws://YOUR_HOST:8787
 yifunqipai
 ```
 
+Already installed? Update to the latest:
+
+```bash
+npm i -g @yifunxxx/qipai-cli@latest
+```
+
 Use `wss://YOUR_DOMAIN` behind HTTPS. Optional: `yifunqipai config set username NICK`. Config file: `~/.yifunqipai/config.json`.
 
 Log in with a display name (names need not be unique; identity is the session). A new connection for the same session kicks the old one.

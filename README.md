@@ -16,6 +16,12 @@ yifunqipai config set serverUrl ws://你的服务器:8787
 yifunqipai
 ```
 
+已安装过，更新到最新版：
+
+```bash
+npm i -g @yifunxxx/qipai-cli@latest
+```
+
 HTTPS 反代时用 `wss://你的域名`。可选：`yifunqipai config set username 昵称`。配置文件：`~/.yifunqipai/config.json`。
 
 进入后输入昵称登录（可重名，身份以会话为准）。同一账号新连接会顶掉旧连接。

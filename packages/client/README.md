@@ -12,6 +12,12 @@
 npm i -g @yifunxxx/qipai-cli
 ```
 
+已安装过，更新到最新版：
+
+```bash
+npm i -g @yifunxxx/qipai-cli@latest
+```
+
 需要 Node.js ≥ 20。
 
 ## 配置服务端地址
