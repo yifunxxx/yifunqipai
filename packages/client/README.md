@@ -1,5 +1,7 @@
 # @yifunxxx/qipai-cli
 
+当前 npm 版本：**0.1.4**
+
 终端棋牌大厅客户端。安装后命令：`yifunqipai`。
 
 本包只含客户端。需要有人先把服务端跑起来，再在配置里填入 WebSocket 地址。

@@ -90,6 +90,8 @@ export async function runTui(client: QipaiClient): Promise<void> {
   let lastEventSeq = 0;
   let lastScoreModalKey = "";
   let scoreModalOpen = false;
+  let lastOccRoomId: string | undefined;
+  let lastOcc: Array<{ userId: string; username: string; isBot: boolean }> = [];
   let mjFx: MjFx | null = null;
   let fxHideTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -134,6 +136,8 @@ export async function runTui(client: QipaiClient): Promise<void> {
     scrollable: true,
     keys: true,
     vi: true,
+    alwaysScroll: false,
+    scrollbar: { ch: "│", style: { inverse: true } },
     shadow: true,
     style: { border: { fg: "yellow" } },
   });
@@ -165,6 +169,35 @@ export async function runTui(client: QipaiClient): Promise<void> {
     screen.render();
   }
 
+  function occupancyOf(room: RoomSummary): Array<{ userId: string; username: string; isBot: boolean }> {
+    return room.seats
+      .filter((s) => s.userId)
+      .map((s) => ({ userId: s.userId!, username: s.username, isBot: s.isBot }));
+  }
+
+  function logRoomOccupancy(room: RoomSummary): void {
+    const occ = occupancyOf(room);
+    if (room.roomId !== lastOccRoomId) {
+      lastOccRoomId = room.roomId;
+      lastOcc = occ;
+      log(`已加入房间 ${room.name}`);
+      return;
+    }
+    const oldIds = new Set(lastOcc.map((s) => s.userId));
+    const newIds = new Set(occ.map((s) => s.userId));
+    for (const s of occ) {
+      if (!oldIds.has(s.userId)) {
+        log(`${s.username}${s.isBot ? "[人机]" : ""} 加入了房间`);
+      }
+    }
+    for (const s of lastOcc) {
+      if (!newIds.has(s.userId)) {
+        log(`${s.username}${s.isBot ? "[人机]" : ""} 离开了房间`);
+      }
+    }
+    lastOcc = occ;
+  }
+
   function setStatus(s: string): void {
     state.status = s;
     render();
@@ -177,6 +210,8 @@ export async function runTui(client: QipaiClient): Promise<void> {
     lastMatchId = undefined;
     lastJustDrewId = undefined;
     lastEventSeq = 0;
+    lastOccRoomId = undefined;
+    lastOcc = [];
     mjFx = null;
     board.hideFx();
     board.hideClaim();
@@ -212,6 +247,8 @@ export async function runTui(client: QipaiClient): Promise<void> {
     scoreModal.setContent(formatScoreBoard(room));
     scoreModal.show();
     scoreModal.setFront();
+    scoreModal.setScroll(0);
+    scoreModal.focus();
     scoreModalOpen = true;
     screen.render();
   }
@@ -220,6 +257,13 @@ export async function runTui(client: QipaiClient): Promise<void> {
     if (!scoreModalOpen) return;
     scoreModal.hide();
     scoreModalOpen = false;
+  }
+
+  function scrollScoreModal(delta: number): boolean {
+    if (!scoreModalOpen) return false;
+    scoreModal.scroll(delta);
+    screen.render();
+    return true;
   }
 
   function maybeShowFinalScores(settled: boolean): void {
@@ -790,7 +834,10 @@ export async function runTui(client: QipaiClient): Promise<void> {
     else if (state.mode === "room") renderRoom();
     else if (state.mode === "mahjong") renderMahjong();
     else if (state.mode === "tenhalf") renderTenhalf();
-    if (scoreModalOpen) scoreModal.setFront();
+    if (scoreModalOpen) {
+      scoreModal.setFront();
+      scoreModal.focus();
+    }
     screen.render();
   }
 
@@ -861,10 +908,14 @@ export async function runTui(client: QipaiClient): Promise<void> {
       state.userId &&
       !room.seats.some((s) => s.userId === state.userId && !s.isBot)
     ) {
+      log(`已离开房间 ${room.name}`);
+      lastOccRoomId = undefined;
+      lastOcc = [];
       enterLobby();
       render();
       return;
     }
+    logRoomOccupancy(room);
     state.room = room;
     if (room.phase === "playing") {
       if (state.mode === "lobby" || state.mode === "login" || state.mode === "room") {
@@ -883,6 +934,9 @@ export async function runTui(client: QipaiClient): Promise<void> {
   });
 
   client.on("room.left", () => {
+    if (state.room) log(`已离开房间 ${state.room.name}`);
+    lastOccRoomId = undefined;
+    lastOcc = [];
     enterLobby();
     render();
   });
@@ -985,6 +1039,19 @@ export async function runTui(client: QipaiClient): Promise<void> {
     process.exit(0);
   });
 
+  screen.key(["up", "k"], () => {
+    if (scrollScoreModal(-1)) return;
+  });
+  screen.key(["down"], () => {
+    if (scrollScoreModal(1)) return;
+  });
+  screen.key(["pageup"], () => {
+    if (scrollScoreModal(-8)) return;
+  });
+  screen.key(["pagedown"], () => {
+    if (scrollScoreModal(8)) return;
+  });
+
   screen.key(["escape"], () => {
     if (scoreModalOpen) {
       closeScoreModal();
@@ -993,7 +1060,6 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }
     if (state.lockedTileId) {
       state.lockedTileId = null;
-      log("取消锁定");
       render();
     }
   });
@@ -1013,12 +1079,14 @@ export async function runTui(client: QipaiClient): Promise<void> {
   });
 
   screen.key(["left"], () => {
+    if (scoreModalOpen) return;
     if (state.mode !== "mahjong") return;
     state.cursor = Math.max(0, state.cursor - 1);
     render();
   });
 
   screen.key(["right"], () => {
+    if (scoreModalOpen) return;
     if (state.mode !== "mahjong") return;
     const hand = (state.game as { selfHand?: unknown[] })?.selfHand ?? [];
     state.cursor = Math.min(hand.length - 1, state.cursor + 1);
@@ -1037,23 +1105,19 @@ export async function runTui(client: QipaiClient): Promise<void> {
     if (!tile) return;
     if (!state.lockedTileId) {
       state.lockedTileId = tile.id;
-      log(`锁定 ${tile.id}`);
       render();
       return;
     }
     if (state.lockedTileId !== tile.id) {
       state.lockedTileId = tile.id;
-      log(`改锁 ${tile.id}`);
       render();
       return;
     }
     if (!(g.availableActions ?? []).includes("discard")) {
-      log("当前不能出牌");
       return;
     }
     client.send("game.action", { action: "discard", data: { tileId: tile.id } });
     state.lockedTileId = null;
-    log("出牌");
   });
 
   screen.key(["p"], () => {
@@ -1211,6 +1275,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     });
   });
   screen.key(["j"], async () => {
+    if (scrollScoreModal(1)) return;
     if (state.mode !== "lobby") return;
     const id = await prompt("房间ID: ");
     if (id) client.send("room.join", { roomId: id });

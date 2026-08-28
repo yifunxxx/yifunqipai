@@ -4,7 +4,7 @@
 
 Play Shaanxi mahjong and “ten-and-a-half” in a terminal: a WebSocket server plus the TUI client `yifunqipai`.
 
-Players install the client from npm and point it at **your** server.
+Players install the client from npm and point it at **your** server. Current npm package `@yifunxxx/qipai-cli` version: **0.1.4**.
 
 ## Play
 

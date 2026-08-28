@@ -1,6 +1,6 @@
 import blessed from "blessed";
 import type { Widgets } from "blessed";
-import { pokerLabel, tileColorHint, tileGlyph } from "@yifun/qipai-shared";
+import { pokerLabel, tileColorHint } from "@yifun/qipai-shared";
 
 type Screen = Widgets.Screen;
 type Box = Widgets.BoxElement;
@@ -338,8 +338,7 @@ function tileFace(t: TileLike): { a: string; b: string; label: string } {
   return { a: pair[0], b: pair[1], label: `${pair[0]}${pair[1]}` };
 }
 
-function tileFg(t: TileLike, selected = false, locked = false): string {
-  if (selected) return "white-fg";
+function tileFg(t: TileLike, locked = false): string {
   if (locked) return "yellow-fg";
   const hint = tileColorHint(t as never);
   if (hint === "red") return "red-fg";
@@ -355,7 +354,8 @@ function padFace(ch: string, width: number): string {
   return `${" ".repeat(left)}${ch}${" ".repeat(extra - left)}`;
 }
 
-function paintFg(text: string, fg: string): string {
+function paintFg(text: string, fg: string, selected = false): string {
+  if (selected) return `{black-fg}{yellow-bg}{bold}${text}{/}`;
   return `{${fg}}{bold}${text}{/}`;
 }
 
@@ -373,7 +373,7 @@ interface TileGeom {
 
 /**
  * 终端格子约 1:2，手牌默认 6×4 对应实体牌 33:43。
- * 他家默认约 1/3（2×2），牌多了再缩小，不会撑满空位。
+ * 他家/弃牌带完整线框，默认约手牌一半宽，牌多了再压矮，不会去掉外框。
  */
 const HAND_SCALES: TileGeom[] = [
   { w: 6, h: 4 },
@@ -383,8 +383,8 @@ const HAND_SCALES: TileGeom[] = [
 ];
 
 const OTHER_SCALES: TileGeom[] = [
-  { w: 2, h: 2 },
-  { w: 2, h: 1 },
+  { w: 4, h: 4 },
+  { w: 4, h: 3 },
 ];
 
 function scalesFor(size: TileChipSize): TileGeom[] {
@@ -410,14 +410,8 @@ function pickGeom(
 
 function makeChip(t: TileLike, geom: TileGeom, selected = false, locked = false): Chip {
   const { a, b } = tileFace(t);
-  const fg = tileFg(t, selected, locked);
-  const paint = (s: string) => paintFg(s, fg);
-  if (geom.w <= 2) {
-    if (geom.h <= 1) {
-      return { width: 2, lines: [paint(tileGlyph(t as never))] };
-    }
-    return { width: 2, lines: [paint(a), paint(b)] };
-  }
+  const fg = tileFg(t, locked);
+  const paint = (s: string) => paintFg(s, fg, selected);
   const inner = Math.max(2, geom.w - 2);
   const width = inner + 2;
   const top = `┌${"─".repeat(inner)}┐`;
@@ -430,10 +424,6 @@ function makeChip(t: TileLike, geom: TileGeom, selected = false, locked = false)
 
 function backChip(geom: TileGeom): Chip {
   const paint = (s: string) => paintFg(s, "white-fg");
-  if (geom.w <= 2) {
-    if (geom.h <= 1) return { width: 2, lines: [paint("▓▓")] };
-    return { width: 2, lines: [paint("┌┐"), paint("└┘")] };
-  }
   const inner = Math.max(2, geom.w - 2);
   const width = inner + 2;
   const top = `┌${"─".repeat(inner)}┐`;

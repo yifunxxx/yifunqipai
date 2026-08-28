@@ -1,0 +1,14 @@
+---
+description: 升级 @yifunxxx/qipai-cli 时必须同步 README 中的版本号
+alwaysApply: true
+---
+
+# CLI 版本与 README 同步
+
+只要改 `@yifunxxx/qipai-cli` 的版本（`packages/client/package.json` 的 `version`），必须同步改下面三处，保持与 package.json **完全一致**：
+
+- `packages/client/README.md`：`当前 npm 版本：**x.y.z**`
+- `README.md`：`当前客户端 npm 包 \`@yifunxxx/qipai-cli\` 版本：**x.y.z**`
+- `README.en.md`：`Current npm package \`@yifunxxx/qipai-cli\` version: **x.y.z**`
+
+不要只改 package.json。用户说「更新 CLI 版本」时，默认升 patch（如 0.1.4 → 0.1.5），并立刻改这三份 README。

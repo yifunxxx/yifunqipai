@@ -175,6 +175,8 @@ export function formatScoreBoard(room: RoomSummary): string {
     return [`  {bold}第 ${r.round} 局{/}`, `    ${deltas}`, ev].filter(Boolean).join("\n");
   });
   return [
+    "{cyan-fg}↑↓ / j k 滚动   PgUp / PgDn 翻页   Enter / Esc / v 关闭{/}",
+    "",
     "{bold}本场结算{/bold}",
     "",
     "排名  玩家  总分",
@@ -183,6 +185,6 @@ export function formatScoreBoard(room: RoomSummary): string {
     "{bold}分局明细{/bold}",
     ...(detail.length ? detail : ["  （暂无）"]),
     "",
-    "Enter / Esc / v 关闭",
+    "Enter / Esc / v 关闭   ↑↓ / j k 滚动",
   ].join("\n");
 }
