@@ -4,7 +4,7 @@
 
 终端里玩的陕西麻将和十点半：WebSocket 服务端 + TUI 客户端 `yifunqipai`。
 
-玩家用 npm 安装客户端，连到你部署的服务器即可。当前客户端 npm 包 `@yifunxxx/qipai-cli` 版本：**0.1.6**。
+玩家用 npm 安装客户端，连到你部署的服务器即可。当前客户端 npm 包 `@yifunxxx/qipai-cli` 版本：**0.1.7**。
 
 ## 玩家怎么用
 

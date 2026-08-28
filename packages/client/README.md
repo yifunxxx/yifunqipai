@@ -1,6 +1,6 @@
 # @yifunxxx/qipai-cli
 
-当前 npm 版本：**0.1.6**
+当前 npm 版本：**0.1.7**
 
 终端棋牌大厅客户端。安装后命令：`yifunqipai`。
 
