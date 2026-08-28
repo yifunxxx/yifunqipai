@@ -13,6 +13,7 @@ import {
   type RoomSetHostPayload,
   type RoomKickPayload,
   type RoomUpdateConfigPayload,
+  type RoomChatPayload,
   type AuthLoginPayload,
   type AuthHelloPayload,
 } from "@yifun/qipai-shared";
@@ -217,11 +218,22 @@ export function createApp(opts: {
         if (!ctx.roomId) break;
         const rid = ctx.roomId;
         const uid = ctx.userId!;
+        const room = lobby.get(rid);
+        const hostLeaving = room?.hostUserId === uid;
+        const snapshot = room
+          ? {
+              roomId: room.roomId,
+              seats: room.seats.map((s) => ({ userId: s.userId, isBot: s.isBot })),
+            }
+          : undefined;
         const remaining = lobby.leave(rid, uid);
         ctx.roomId = undefined;
         send(ws, "room.left", { roomId: rid }, requestId);
         if (!remaining) {
           matches.abandon(rid);
+          if (hostLeaving && snapshot) {
+            notifyRoomGone(snapshot, uid, "房主已离开，房间已解散");
+          }
         } else {
           matches.convertHumanToBot(rid, uid);
           broadcastRoom(rid);
@@ -345,6 +357,32 @@ export function createApp(opts: {
         broadcastRoom(ctx.roomId);
         break;
       }
+      case "room.chat": {
+        if (!ctx.roomId) throw Object.assign(new Error("不在房间"), { code: "NOT_IN_ROOM" });
+        const room = lobby.get(ctx.roomId);
+        if (!room) throw Object.assign(new Error("房间不存在"), { code: "ROOM_NOT_FOUND" });
+        const inSeat = room.seats.some((s) => s.userId === ctx.userId && !s.isBot);
+        if (!inSeat) throw Object.assign(new Error("不在房间内"), { code: "NOT_IN_ROOM" });
+        const raw = String((payload as RoomChatPayload).text ?? "")
+          .replace(/[\r\n\t]/g, " ")
+          .trim()
+          .slice(0, 200);
+        if (!raw) break;
+        const msg = {
+          roomId: ctx.roomId,
+          userId: ctx.userId!,
+          username: ctx.username!,
+          text: raw,
+          at: Date.now(),
+        };
+        for (const [, occWs] of connections) {
+          const occ = ctxByWs.get(occWs);
+          if (!occ?.userId) continue;
+          if (!room.seats.some((s) => s.userId === occ.userId && !s.isBot)) continue;
+          send(occWs, "room.chatMessage", msg, requestId);
+        }
+        break;
+      }
       default:
         err(ws, "UNKNOWN_TYPE", `未知消息类型 ${type}`, requestId);
     }
@@ -405,6 +443,7 @@ export function createApp(opts: {
   function notifyRoomGone(
     room: { roomId: string; seats: Array<{ userId: string | null; isBot: boolean }> },
     exceptUserId?: string,
+    reason?: string,
   ): void {
     for (const seat of room.seats) {
       if (!seat.userId || seat.isBot) continue;
@@ -413,7 +452,7 @@ export function createApp(opts: {
       if (!occWs) continue;
       const occCtx = ctxByWs.get(occWs);
       if (occCtx) occCtx.roomId = undefined;
-      send(occWs, "room.left", { roomId: room.roomId });
+      send(occWs, "room.left", { roomId: room.roomId, reason: reason ?? "房间已解散" });
     }
   }
 

@@ -124,6 +124,18 @@ export interface RoomKickedPayload {
   reason: string;
 }
 
+export interface RoomChatPayload {
+  text: string;
+}
+
+export interface RoomChatMessagePayload {
+  roomId: string;
+  userId: string;
+  username: string;
+  text: string;
+  at: number;
+}
+
 export interface RoomUpdateConfigPayload {
   config: Partial<RoomConfig>;
 }

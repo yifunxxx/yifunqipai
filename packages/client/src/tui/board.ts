@@ -5,6 +5,13 @@ import { pokerLabel, tileColorHint } from "@yifun/qipai-shared";
 type Screen = Widgets.Screen;
 type Box = Widgets.BoxElement;
 
+const WIN_TUI = process.platform === "win32";
+
+function wipe(box: Box): void {
+  box.setContent("");
+  box.hide();
+}
+
 export type MjSeatSlot = "top" | "left" | "right" | "bottom";
 
 export const MJ_REST_BORDER: Record<MjSeatSlot | "center", string> = {
@@ -53,6 +60,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     width: "70%",
     height: "100%-6",
     tags: true,
+    style: { bg: "black" },
   });
 
   const textMain = blessed.box({
@@ -65,6 +73,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     border: { type: "line" },
     label: " 主区 ",
     content: "",
+    style: { bg: "black" },
   });
 
   const mjTop = blessed.box({
@@ -78,7 +87,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     scrollable: true,
     border: { type: "line" },
     label: " 对家 ",
-    style: { border: { fg: "cyan" } },
+    style: { border: { fg: "cyan" }, bg: "black" },
     hidden: true,
   });
   const mjLeft = blessed.box({
@@ -92,7 +101,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     scrollable: true,
     border: { type: "line" },
     label: " 上家 ",
-    style: { border: { fg: "magenta" } },
+    style: { border: { fg: "magenta" }, bg: "black" },
     hidden: true,
   });
   const mjCenter = blessed.box({
@@ -105,7 +114,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     wrap: false,
     border: { type: "line" },
     label: " 公区 ",
-    style: { border: { fg: "white" } },
+    style: { border: { fg: "white" }, bg: "black" },
     hidden: true,
   });
   const mjRight = blessed.box({
@@ -119,7 +128,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     scrollable: true,
     border: { type: "line" },
     label: " 下家 ",
-    style: { border: { fg: "yellow" } },
+    style: { border: { fg: "yellow" }, bg: "black" },
     hidden: true,
   });
   const mjBottom = blessed.box({
@@ -132,7 +141,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     wrap: false,
     border: { type: "line" },
     label: " 自家 ",
-    style: { border: { fg: "green" } },
+    style: { border: { fg: "green" }, bg: "black" },
     hidden: true,
   });
 
@@ -147,7 +156,8 @@ export function createGameBoard(parent: Screen): GameBoard {
     valign: "middle",
     border: { type: "line" },
     hidden: true,
-    shadow: true,
+    shadow: !WIN_TUI,
+    style: { bg: "black" },
   });
 
   const mjClaim = blessed.box({
@@ -160,7 +170,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     border: { type: "line" },
     label: " 操作 ",
     hidden: true,
-    shadow: true,
+    shadow: !WIN_TUI,
     style: { border: { fg: "magenta" }, bg: "black" },
   });
 
@@ -173,7 +183,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     tags: true,
     border: { type: "line" },
     label: " 十点半 ",
-    style: { border: { fg: "white" } },
+    style: { border: { fg: "white" }, bg: "black" },
     hidden: true,
   });
 
@@ -191,7 +201,7 @@ export function createGameBoard(parent: Screen): GameBoard {
         tags: true,
         border: { type: "line" },
         label: ` 座位${i + 1} `,
-        style: { border: { fg: col === 0 ? "cyan" : "yellow" } },
+        style: { border: { fg: col === 0 ? "cyan" : "yellow" }, bg: "black" },
         hidden: true,
       }),
     );
@@ -207,6 +217,7 @@ export function createGameBoard(parent: Screen): GameBoard {
     border: { type: "line" },
     label: " 提示 ",
     hidden: true,
+    style: { bg: "black" },
   });
 
   const mjAll = [mjTop, mjLeft, mjCenter, mjRight, mjBottom];
@@ -218,13 +229,13 @@ export function createGameBoard(parent: Screen): GameBoard {
     center: mjCenter,
   };
 
-  function hideAll(): void {
-    textMain.hide();
-    for (const b of mjAll) b.hide();
-    mjClaim.hide();
-    thInfo.hide();
-    thHint.hide();
-    for (const b of thSeats) b.hide();
+  function hideExcept(keep: Box[]): void {
+    const keepSet = new Set(keep);
+    const all = [textMain, ...mjAll, mjClaim, thInfo, thHint, ...thSeats];
+    for (const b of all) {
+      if (keepSet.has(b)) continue;
+      wipe(b);
+    }
   }
 
   function setMjBorder(slot: MjSeatSlot | "center", color: string, bold = false): void {
@@ -257,7 +268,7 @@ export function createGameBoard(parent: Screen): GameBoard {
   }
 
   function hideFx(): void {
-    mjFx.hide();
+    wipe(mjFx);
   }
 
   function showClaim(lines: string[]): void {
@@ -272,7 +283,7 @@ export function createGameBoard(parent: Screen): GameBoard {
   }
 
   function hideClaim(): void {
-    mjClaim.hide();
+    wipe(mjClaim);
   }
 
   return {
@@ -290,21 +301,22 @@ export function createGameBoard(parent: Screen): GameBoard {
     th: { info: thInfo, seats: thSeats, hint: thHint },
     showText() {
       hideFx();
-      hideAll();
+      hideExcept([textMain]);
       textMain.show();
     },
     showMahjong() {
-      hideAll();
+      hideExcept(mjAll);
       for (const b of mjAll) b.show();
     },
     showTenhalf(seatCount: number) {
       hideFx();
-      hideAll();
+      const keep = [thInfo, thHint, ...thSeats.slice(0, seatCount)];
+      hideExcept(keep);
       thInfo.show();
       thHint.show();
       for (let i = 0; i < thSeats.length; i++) {
         if (i < seatCount) thSeats[i]!.show();
-        else thSeats[i]!.hide();
+        else wipe(thSeats[i]!);
       }
     },
     setMjBorder,

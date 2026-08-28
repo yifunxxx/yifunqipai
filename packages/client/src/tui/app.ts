@@ -43,6 +43,20 @@ function displayWidth(text: string): number {
   return w;
 }
 
+function commonPrefix(items: string[]): string {
+  if (!items.length) return "";
+  let prefix = items[0]!;
+  for (const item of items) {
+    let n = 0;
+    while (n < prefix.length && n < item.length && prefix[n]!.toLowerCase() === item[n]!.toLowerCase()) {
+      n++;
+    }
+    prefix = prefix.slice(0, n);
+    if (!prefix) break;
+  }
+  return prefix;
+}
+
 interface AppState {
   mode: ScreenMode;
   username: string;
@@ -63,6 +77,11 @@ interface MjFx {
 }
 
 export async function runTui(client: QipaiClient): Promise<void> {
+  const winTui = process.platform === "win32";
+  if (winTui && !process.env.TERM) {
+    process.env.TERM = "xterm-256color";
+  }
+
   const cfg = loadConfig();
   const state: AppState = {
     mode: "login",
@@ -74,9 +93,12 @@ export async function runTui(client: QipaiClient): Promise<void> {
   };
 
   const screen = blessed.screen({
-    smartCSR: true,
-    title: "YiFun 棋牌大厅",
+    smartCSR: !winTui,
+    fastCSR: false,
+    useBCE: true,
     fullUnicode: true,
+    dockBorders: true,
+    title: "YiFun 棋牌大厅",
   });
 
   const header = blessed.box({
@@ -89,6 +111,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     border: { type: "line" },
     label: " YiFun 棋牌 ",
     content: "",
+    style: { bg: "black" },
   });
 
   const board = createGameBoard(screen);
@@ -117,7 +140,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     label: " 日志 ",
     scrollable: true,
     alwaysScroll: true,
-    style: { border: { fg: "red" } },
+    style: { border: { fg: "red" }, bg: "black" },
   });
 
   const discardBox = blessed.box({
@@ -125,13 +148,28 @@ export async function runTui(client: QipaiClient): Promise<void> {
     top: 3,
     left: "70%",
     width: "30%",
-    height: "100%-6",
+    height: "50%-3",
     tags: true,
     border: { type: "line" },
     label: " 弃牌 ",
     scrollable: true,
     hidden: true,
-    style: { border: { fg: "yellow" } },
+    style: { border: { fg: "yellow" }, bg: "black" },
+  });
+
+  const chatBox = blessed.log({
+    parent: screen,
+    top: 3,
+    left: "70%",
+    width: "30%",
+    height: "100%-6",
+    tags: true,
+    border: { type: "line" },
+    label: " 聊天 ",
+    scrollable: true,
+    alwaysScroll: true,
+    hidden: true,
+    style: { border: { fg: "green" }, bg: "black" },
   });
 
   const scoreModal = blessed.box({
@@ -149,8 +187,8 @@ export async function runTui(client: QipaiClient): Promise<void> {
     vi: true,
     alwaysScroll: false,
     scrollbar: { ch: "│", style: { inverse: true } },
-    shadow: true,
-    style: { border: { fg: "yellow" } },
+    shadow: !winTui,
+    style: { border: { fg: "yellow" }, bg: "black" },
   });
 
   const footer = blessed.box({
@@ -163,6 +201,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     border: { type: "line" },
     label: " 操作 ",
     content: "",
+    style: { bg: "black" },
   });
 
   const promptLabel = blessed.box({
@@ -174,7 +213,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     hidden: true,
     tags: false,
     content: "",
-    style: { fg: "cyan" },
+    style: { fg: "cyan", bg: "black" },
   });
 
   const input = blessed.textbox({
@@ -186,12 +225,30 @@ export async function runTui(client: QipaiClient): Promise<void> {
     inputOnFocus: true,
     keys: true,
     hidden: true,
+    style: { bg: "black", fg: "white" },
   });
 
   let prompting = false;
+  let chatting = false;
+  let chatWelcomeFor: string | undefined;
+  const CHAT_LABEL = "聊天: ";
+
+  function setInputGrab(on: boolean): void {
+    (input as { grabKeys?: boolean }).grabKeys = on;
+  }
 
   function log(msg: string): void {
     logBox.log(msg);
+    if (state.mode === "mahjong" || state.mode === "tenhalf" || state.mode === "room") {
+      chatBox.log(`{white-fg}* ${msg}{/}`);
+    }
+    screen.render();
+  }
+
+  function appendChatLine(username: string, text: string, self: boolean): void {
+    const safe = text.replace(/[{}]/g, "");
+    const name = self ? `{green-fg}${username}{/}` : `{cyan-fg}${username}{/}`;
+    chatBox.log(`${name} ${safe}`);
     screen.render();
   }
 
@@ -242,6 +299,9 @@ export async function runTui(client: QipaiClient): Promise<void> {
     board.hideFx();
     board.hideClaim();
     closeScoreModal();
+    endChat();
+    chatBox.setContent("");
+    chatWelcomeFor = undefined;
     if (refreshRooms) client.send("lobby.listRooms", {});
   }
 
@@ -260,8 +320,22 @@ export async function runTui(client: QipaiClient): Promise<void> {
   function layoutSidePanel(): void {
     if (state.mode === "mahjong") {
       logBox.hide();
+      discardBox.top = 3;
+      discardBox.height = "50%-3";
       discardBox.show();
+      chatBox.top = "50%";
+      chatBox.height = "50%-3";
+      chatBox.show();
+    } else if (state.mode === "tenhalf" || state.mode === "room") {
+      logBox.hide();
+      discardBox.setContent("");
+      discardBox.hide();
+      chatBox.top = 3;
+      chatBox.height = "100%-6";
+      chatBox.show();
     } else {
+      chatBox.hide();
+      discardBox.setContent("");
       discardBox.hide();
       logBox.show();
     }
@@ -281,6 +355,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
 
   function closeScoreModal(): void {
     if (!scoreModalOpen) return;
+    scoreModal.setContent("");
     scoreModal.hide();
     scoreModalOpen = false;
   }
@@ -572,7 +647,11 @@ export async function runTui(client: QipaiClient): Promise<void> {
         .join("\n"),
     );
 
-    const discSize = boxSize(discardBox, Math.max(12, Math.floor((Number.isFinite(sw) && sw > 0 ? sw : 80) * 0.3) - 2), boardRows);
+    const discSize = boxSize(
+      discardBox,
+      Math.max(12, Math.floor((Number.isFinite(sw) && sw > 0 ? sw : 80) * 0.3) - 2),
+      Math.max(6, Math.floor(boardRows / 2) - 1),
+    );
     discardBox.setContent(
       renderDiscardRiver(
         [top, left, right, bottom].map((p, i) => ({
@@ -620,7 +699,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
     } else {
       bottomExtra = `\n{yellow-fg}等待中${dots} 当前由 ${currentName} 行动{/}`;
     }
-    bottomExtra += "\n{cyan-fg}l 离开房间   q 退出游戏{/}";
+    bottomExtra += "\n{cyan-fg}Enter聊天  Esc退出聊天  l离开  q退出{/}";
 
     const myClock = !bottom.isBot && (myTurn || myClaim) ? clockText() : "";
     board.mj.bottom.setLabel(` 自家 - ${seatWind(bottom.seat)}风 `);
@@ -655,10 +734,10 @@ export async function runTui(client: QipaiClient): Promise<void> {
 
     footer.setContent(
       allDone
-        ? "{bold}麻将{/bold}  全部局结束 | v积分  x回等待  l离开  q退出"
+        ? "{bold}麻将{/bold}  全部局结束 | v积分  x回等待  l离开  Enter聊天  q退出"
         : settled
-          ? "{bold}麻将{/bold}  本局结束 | y准备下一局  v积分  l离开  q退出"
-          : `{bold}麻将{/bold}  ${mahjongPhaseName(g.phase)} | 空格出牌 | p碰 g明杠 h胡 | l离开  q退出`,
+          ? "{bold}麻将{/bold}  本局结束 | y准备下一局  v积分  l离开  Enter聊天  q退出"
+          : `{bold}麻将{/bold}  ${mahjongPhaseName(g.phase)} | 空格出牌 | p碰 g明杠 h胡 | Enter聊天  l离开  q退出`,
     );
   }
 
@@ -745,16 +824,16 @@ export async function runTui(client: QipaiClient): Promise<void> {
 
     if (allDone) {
       board.th.hint.setContent("{bold}全部局结束{/bold}  v查看积分  |  x回等待房  l离开");
-      footer.setContent("{bold}十点半{/bold}  全部结束 | v积分  x回等待  l离开");
+      footer.setContent("{bold}十点半{/bold}  全部结束 | v积分  x回等待  l离开  Enter聊天");
       maybeShowFinalScores(true);
     } else if (settled) {
       board.th.hint.setContent("本局结束，即将自动下一局…  (也可按 n)");
-      footer.setContent("{bold}十点半{/bold}  结算中 | n续局  x回等待  l离开");
+      footer.setContent("{bold}十点半{/bold}  结算中 | n续局  x回等待  l离开  Enter聊天");
     } else {
       board.th.hint.setContent(
-        `可选 ${(g.availableActions ?? []).join(",") || "-"}   h要牌  s停牌  r刷新`,
+        `可选 ${(g.availableActions ?? []).join(",") || "-"}   h要牌  s停牌  Enter聊天  r刷新`,
       );
-      footer.setContent("{bold}十点半{/bold}  h要牌 s停牌 | l离开房间  q退出");
+      footer.setContent("{bold}十点半{/bold}  h要牌 s停牌 | Enter聊天  l离开  q退出");
     }
   }
 
@@ -773,13 +852,13 @@ export async function runTui(client: QipaiClient): Promise<void> {
         "  2) 创建十点半通比房（3人机）",
         "  3) 创建十点半打庄房（1人机）",
         "  r) 刷新房间列表",
-        "  j) 加入房间（输入房间ID）",
+        "  j) 加入房间（输入房间ID，Tab 补全）",
         "",
         "房间列表:",
         ...lines,
       ].join("\n"),
     );
-    footer.setContent("大厅: 1/2/3创建  j加入  r刷新  o退出登录  q退出");
+    footer.setContent("大厅: 1/2/3创建  j加入(Tab补全)  r刷新  o退出登录  q退出");
   }
 
   function renderRoom(): void {
@@ -824,16 +903,16 @@ export async function runTui(client: QipaiClient): Promise<void> {
         finished
           ? "{bold}全部局已结束{/bold}  按 v 查看排名与分局明细"
           : hasScores
-            ? "按 v 可查看上一场积分  |  等待中可按 {yellow-fg}c{/} 配置玩法"
-            : "提示: 等待中可按 {yellow-fg}c{/} 配置玩法（局数/牌数/锅底等）",
+            ? "按 v 可查看上一场积分  |  等待中可按 {yellow-fg}c{/} 配置玩法  |  {yellow-fg}Enter{/} 聊天"
+            : "提示: 等待中可按 {yellow-fg}c{/} 配置玩法（局数/牌数/锅底等），{yellow-fg}Enter{/} 聊天",
         "y准备  u取消准备  b加人机  d移除人机  t转让房主  k踢人  c配置",
-        "s开始  n续局/统分后回等待  x回等待  l离开  o退出登录",
+        "s开始  n续局/统分后回等待  x回等待  l离开  Enter聊天  o退出登录",
       ].join("\n"),
     );
     footer.setContent(
       hasScores
-        ? "房间: v积分  c配置  y/u准备  b/d人机  t房主  k踢人  s开始  l离开  o登出"
-        : "房间: c配置  y/u准备  b/d人机  t房主  k踢人  s开始  l离开  o登出",
+        ? "房间: v积分  c配置  y/u准备  b/d人机  t房主  k踢人  s开始  Enter聊天  l离开  o登出"
+        : "房间: c配置  y/u准备  b/d人机  t房主  k踢人  s开始  Enter聊天  l离开  o登出",
     );
   }
 
@@ -852,6 +931,8 @@ export async function runTui(client: QipaiClient): Promise<void> {
     footer.setContent("登录: Enter 输入用户名   q退出");
   }
 
+  let lastPaintMode: ScreenMode | undefined;
+
   function render(): void {
     renderHeader();
     layoutSidePanel();
@@ -864,12 +945,16 @@ export async function runTui(client: QipaiClient): Promise<void> {
       scoreModal.setFront();
       scoreModal.focus();
     }
-    if (prompting) {
+    if (prompting || chatting) {
       footer.setContent("");
       promptLabel.setFront();
       input.setFront();
-      input.focus();
+      if (screen.focused !== input) input.focus();
     }
+    if (winTui && lastPaintMode !== state.mode) {
+      screen.realloc();
+    }
+    lastPaintMode = state.mode;
     screen.render();
   }
 
@@ -960,6 +1045,10 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }
     logRoomOccupancy(room);
     state.room = room;
+    if (chatWelcomeFor !== room.roomId) {
+      chatWelcomeFor = room.roomId;
+      chatBox.log("{yellow-fg}等待和对局中都可聊天：Enter 输入，Esc 退出{/}");
+    }
     if (room.phase === "playing") {
       if (state.mode === "lobby" || state.mode === "login" || state.mode === "room") {
         state.mode = room.gameType === "mahjong" ? "mahjong" : "tenhalf";
@@ -976,8 +1065,20 @@ export async function runTui(client: QipaiClient): Promise<void> {
     render();
   });
 
-  client.on("room.left", () => {
-    if (state.room) log(`已离开房间 ${state.room.name}`);
+  client.on("room.chatMessage", (env) => {
+    const p = env.payload as {
+      userId?: string;
+      username?: string;
+      text?: string;
+    };
+    if (!p.text) return;
+    appendChatLine(p.username ?? "玩家", p.text, p.userId === state.userId);
+  });
+
+  client.on("room.left", (env) => {
+    const p = (env.payload ?? {}) as { reason?: string };
+    if (p.reason) log(p.reason);
+    else if (state.room) log(`已离开房间 ${state.room.name}`);
     lastOccRoomId = undefined;
     lastOcc = [];
     enterLobby();
@@ -1021,12 +1122,81 @@ export async function runTui(client: QipaiClient): Promise<void> {
     board.hideFx();
     board.hideClaim();
     closeScoreModal();
+    endChat();
+    chatBox.setContent("");
     if (reason) log(reason);
     setStatus(reason ?? "按 Enter 登录");
   }
 
-  function prompt(label: string): Promise<string | null> {
+  function canChat(): boolean {
+    return Boolean(state.room) && state.mode !== "login" && state.mode !== "lobby";
+  }
+
+  function layoutChatInput(): void {
+    const cols = Math.max(1, displayWidth(CHAT_LABEL));
+    promptLabel.setContent(CHAT_LABEL);
+    promptLabel.width = cols;
+    promptLabel.left = 2;
+    promptLabel.show();
+    input.left = 2 + cols;
+    input.width = `100%-${4 + cols}`;
+    input.setValue("");
+    input.show();
+    promptLabel.setFront();
+    input.setFront();
+    setInputGrab(true);
+    input.focus();
+    screen.render();
+  }
+
+  function onChatSubmit(val: string): void {
+    const text = String(val ?? "")
+      .replace(/[\r\n\t]/g, " ")
+      .replace(/[{}]/g, "")
+      .trim()
+      .slice(0, 200);
+    if (text) client.send("room.chat", { text });
+    if (!chatting) return;
+    setImmediate(() => {
+      if (chatting) layoutChatInput();
+    });
+  }
+
+  function onChatCancel(): void {
+    endChat();
+  }
+
+  function detachChatInput(): void {
+    input.removeListener("submit", onChatSubmit);
+    input.removeListener("cancel", onChatCancel);
+  }
+
+  function beginChat(): void {
+    if (chatting || prompting) return;
+    if (!canChat()) return;
+    chatting = true;
+    prompting = true;
+    detachChatInput();
+    input.on("submit", onChatSubmit);
+    input.on("cancel", onChatCancel);
+    layoutChatInput();
+  }
+
+  function endChat(): void {
+    if (!chatting) return;
+    chatting = false;
+    detachChatInput();
+    setInputGrab(false);
+    input.hide();
+    promptLabel.hide();
+    prompting = false;
+    screen.render();
+    render();
+  }
+
+  function prompt(label: string, opts?: { complete?: () => string[] }): Promise<string | null> {
     return new Promise((resolve) => {
+      if (chatting) endChat();
       prompting = true;
       const cols = Math.max(1, displayWidth(label));
       promptLabel.setContent(label);
@@ -1039,10 +1209,76 @@ export async function runTui(client: QipaiClient): Promise<void> {
       input.setValue("");
       promptLabel.setFront();
       input.setFront();
+      setInputGrab(true);
       input.focus();
       screen.render();
 
+      let tabIndex = 0;
+      let tabBase = "";
+      let tabBusy = false;
+
+      const applyComplete = (val: string) => {
+        const clean = val.replace(/\t/g, "");
+        input.setValue(clean);
+        input.focus();
+        screen.render();
+        setImmediate(() => {
+          input.setValue(String(input.getValue() ?? "").replace(/\t/g, "") || clean);
+          input.focus();
+          screen.render();
+        });
+      };
+
+      const onTab = () => {
+        if (tabBusy) return;
+        tabBusy = true;
+        setImmediate(() => {
+          tabBusy = false;
+        });
+        const ids = opts?.complete?.() ?? [];
+        if (!ids.length) {
+          applyComplete(String(input.getValue() ?? "").replace(/\t/g, ""));
+          log("暂无房间可补全，先按 r 刷新列表");
+          return;
+        }
+        const cur = String(input.getValue() ?? "").replace(/\t/g, "").trim();
+        const asNum = Number(cur);
+        if (cur !== "" && Number.isInteger(asNum) && asNum >= 1 && asNum <= ids.length) {
+          applyComplete(ids[asNum - 1]!);
+          return;
+        }
+        if (!ids.includes(cur)) {
+          tabBase = cur;
+          tabIndex = 0;
+        }
+        const matches = ids.filter((id) => id.toLowerCase().startsWith(tabBase.toLowerCase()));
+        const pool = matches.length ? matches : ids;
+        if (tabIndex === 0 && pool.length > 1 && !tabBase) {
+          const shared = commonPrefix(pool);
+          if (shared) {
+            tabBase = shared;
+            applyComplete(shared);
+            log(`房间: ${pool.join("  ")}  （再按 Tab 循环）`);
+            return;
+          }
+        }
+        const pick = pool[tabIndex % pool.length]!;
+        tabIndex = (tabIndex + 1) % pool.length;
+        applyComplete(pick);
+        if (pool.length > 1) log(`补全 ${pick}  (${pool.length} 个匹配，Tab 切换)`);
+      };
+
+      if (opts?.complete) {
+        input.key("tab", onTab);
+        screen.key("tab", onTab);
+      }
+
       const finish = (val: string | null) => {
+        if (opts?.complete) {
+          input.unkey("tab", onTab);
+          screen.unkey("tab", onTab);
+        }
+        setInputGrab(false);
         input.hide();
         promptLabel.hide();
         screen.render();
@@ -1209,13 +1445,17 @@ export async function runTui(client: QipaiClient): Promise<void> {
     else if (state.room) client.send("game.sync", {});
   });
 
-  bindKey(["enter"], async () => {
+  bindKey(["enter", "return"], async () => {
     if (scoreModalOpen) {
       closeScoreModal();
       screen.render();
       return;
     }
-    if (state.mode === "login") await doLogin();
+    if (state.mode === "login") {
+      await doLogin();
+      return;
+    }
+    if (canChat()) beginChat();
   });
 
   bindKey(["left"], () => {
@@ -1419,7 +1659,9 @@ export async function runTui(client: QipaiClient): Promise<void> {
   bindKey(["j"], async () => {
     if (scrollScoreModal(1)) return;
     if (state.mode !== "lobby") return;
-    const id = await prompt("房间ID: ");
+    const id = await prompt("房间ID: ", {
+      complete: () => state.rooms.map((r) => r.roomId),
+    });
     if (id) client.send("room.join", { roomId: id });
   });
 

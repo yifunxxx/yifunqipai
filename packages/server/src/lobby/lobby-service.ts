@@ -301,6 +301,13 @@ export class LobbyService {
 
     const otherHumans = room.seats.some((s) => s.userId && !s.isBot && s.userId !== userId);
 
+    /** 房主离开：无论等待还是对局，立刻解散房间 */
+    if (room.hostUserId === userId) {
+      this.rooms.delete(roomId);
+      this.store.deleteRoom(roomId);
+      return null;
+    }
+
     if (room.phase === "playing" || room.phase === "settled") {
       if (!otherHumans) {
         this.rooms.delete(roomId);
@@ -312,10 +319,6 @@ export class LobbyService {
       seat.username = `人机${seat.seat + 1}`;
       seat.ready = true;
       seat.connected = true;
-      if (room.hostUserId === userId) {
-        const next = room.seats.find((s) => s.userId && !s.isBot);
-        if (next?.userId) room.hostUserId = next.userId;
-      }
       this.persist(room);
       return room;
     }
@@ -325,15 +328,6 @@ export class LobbyService {
     seat.ready = false;
     seat.connected = false;
     seat.isBot = false;
-    if (room.hostUserId === userId) {
-      const next = room.seats.find((s) => s.userId && !s.isBot);
-      if (next?.userId) room.hostUserId = next.userId;
-      else {
-        this.rooms.delete(roomId);
-        this.store.deleteRoom(roomId);
-        return null;
-      }
-    }
     this.persist(room);
     return room;
   }

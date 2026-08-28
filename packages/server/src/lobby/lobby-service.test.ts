@@ -32,21 +32,46 @@ describe("lobby leave", () => {
     }
   });
 
-  it("converts the leaver to a bot when other humans remain", () => {
+  it("converts a guest leaver to a bot when other humans remain", () => {
     const { lobby, cleanup } = tmpLobby();
     try {
       const room = lobby.create("u1", "host", "mahjong", undefined, { botCount: 2 });
       lobby.join(room.roomId, "u2", "p2");
       lobby.markPlaying(room, "match-2");
-      const left = lobby.leave(room.roomId, "u1");
+      const left = lobby.leave(room.roomId, "u2");
       assert.ok(left);
       assert.equal(left.seats.filter((s) => !s.isBot && s.userId).length, 1);
-      assert.equal(left.seats.find((s) => s.userId === "u2")?.isBot, false);
-      assert.equal(
-        left.seats.filter((s) => s.isBot).length,
-        3,
-      );
-      assert.equal(lobby.findRoomByUser("u1"), undefined);
+      assert.equal(left.seats.find((s) => s.userId === "u1")?.isBot, false);
+      assert.equal(left.seats.filter((s) => s.isBot).length, 3);
+      assert.equal(lobby.findRoomByUser("u2"), undefined);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("dissolves the room when the host leaves, even if guests remain", () => {
+    const { lobby, cleanup } = tmpLobby();
+    try {
+      const room = lobby.create("u1", "host", "mahjong", undefined, { botCount: 0 });
+      lobby.join(room.roomId, "u2", "p2");
+      const left = lobby.leave(room.roomId, "u1");
+      assert.equal(left, null);
+      assert.equal(lobby.get(room.roomId), undefined);
+      assert.equal(lobby.findRoomByUser("u2"), undefined);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("dissolves when the host leaves mid-game even if other humans remain", () => {
+    const { lobby, cleanup } = tmpLobby();
+    try {
+      const room = lobby.create("u1", "host", "mahjong", undefined, { botCount: 1 });
+      lobby.join(room.roomId, "u2", "p2");
+      lobby.markPlaying(room, "match-host-leave");
+      const left = lobby.leave(room.roomId, "u1");
+      assert.equal(left, null);
+      assert.equal(lobby.get(room.roomId), undefined);
     } finally {
       cleanup();
     }
