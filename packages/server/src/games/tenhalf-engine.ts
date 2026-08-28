@@ -77,6 +77,8 @@ interface Internal {
   deck: PokerCard[];
   players: TenhalfPlayerState[];
   bankerSeat: number;
+  /** 本局第一个行动座位（通比=赢家；打庄=庄家的下家） */
+  startSeat: number;
   currentSeat: number;
   potTotal: number;
   logs: string[];
@@ -103,6 +105,7 @@ export class TenhalfEngine {
       score: number;
     }>,
     rng: () => number = Math.random,
+    startSeat?: number,
   ) {
     const deck = shuffleInPlace(buildPokerDeck(), rng);
     const potPer = config.potPerPlayer;
@@ -115,7 +118,11 @@ export class TenhalfEngine {
       revealed: false,
       potShare: potPer,
     }));
-    const bankerSeat = config.mode === "banker" ? 0 : 0;
+    const n = Math.max(1, players.length);
+    const start = ((startSeat ?? 0) % n + n) % n;
+    // 通比无庄；打庄由上一局赢家（首局房主）坐庄，闲家先行动
+    const bankerSeat = config.mode === "banker" ? start : -1;
+    const currentSeat = config.mode === "banker" ? (start + 1) % n : start;
     // 各发一张暗牌
     for (const p of players) {
       p.hole = deck.pop()!;
@@ -128,7 +135,8 @@ export class TenhalfEngine {
       deck,
       players,
       bankerSeat,
-      currentSeat: (bankerSeat + 1) % players.length,
+      startSeat: start,
+      currentSeat,
       potTotal: potPer * players.length,
       logs: [
         `十点半开始（${config.mode === "banker" ? "打庄" : "通比"}），锅底 ${potPer * players.length}`,
@@ -145,6 +153,13 @@ export class TenhalfEngine {
   static fromJSON(raw: string): TenhalfEngine {
     const data = JSON.parse(raw) as Internal;
     const eng = Object.create(TenhalfEngine.prototype) as TenhalfEngine;
+    if (typeof data.startSeat !== "number") {
+      data.startSeat = data.config?.mode === "banker" ? data.bankerSeat ?? 0 : 0;
+    }
+    if (data.config?.mode === "free" && data.bankerSeat === 0 && data.phase !== "settled") {
+      // 旧存档通比误把房主当庄：进行中的局去掉庄标记
+      data.bankerSeat = -1;
+    }
     eng.s = data;
     return eng;
   }
@@ -159,6 +174,28 @@ export class TenhalfEngine {
 
   getScores(): number[] {
     return this.s.players.map((p) => p.score);
+  }
+
+  getScoreEvents(): ScoreEvent[] {
+    return this.s.scoreEvents;
+  }
+
+  getStartSeat(): number {
+    return this.s.startSeat;
+  }
+
+  /** 本局赢家座位：分差最高者；并列则保留本局起始座位 */
+  getWinnerSeat(): number {
+    const scores = this.getScores();
+    if (!scores.length) return this.s.startSeat;
+    let best = 0;
+    for (let i = 1; i < scores.length; i++) {
+      if ((scores[i] ?? 0) > (scores[best] ?? 0)) best = i;
+    }
+    const top = scores[best] ?? 0;
+    const tied = scores.map((s, i) => (s === top ? i : -1)).filter((i) => i >= 0);
+    if (tied.length > 1 && tied.includes(this.s.startSeat)) return this.s.startSeat;
+    return best;
   }
 
   private allCards(p: TenhalfPlayerState): PokerCard[] {
@@ -275,8 +312,7 @@ export class TenhalfEngine {
     if (p.stopped || p.busted || p.revealed) {
       this.nextSeat();
     }
-    // 未停则继续同一人决策
-    if (this.s.autoFinishActive) this.runAutoFinish();
+    if (this.s.autoFinishActive) this.s.phase = "reveal_auto";
   }
 
   private stand(seat: number): void {
@@ -284,7 +320,7 @@ export class TenhalfEngine {
     p.stopped = true;
     this.s.logs.push(`座位${seat} 停牌（${handPoints(this.allCards(p))}）`);
     this.nextSeat();
-    if (this.s.autoFinishActive) this.runAutoFinish();
+    if (this.s.autoFinishActive) this.s.phase = "reveal_auto";
   }
 
   private nextSeat(): void {
@@ -293,9 +329,26 @@ export class TenhalfEngine {
     this.skipStopped();
   }
 
+  private remainingAuto(): TenhalfPlayerState[] {
+    return this.s.players.filter((p) => !p.stopped && !p.busted && !p.revealed);
+  }
+
+  private nextAutoPlayer(): TenhalfPlayerState | undefined {
+    const n = this.s.players.length;
+    for (let i = 0; i < n; i++) {
+      const p = this.s.players[(this.s.currentSeat + i) % n]!;
+      if (!p.stopped && !p.busted && !p.revealed) return p;
+    }
+    return undefined;
+  }
+
   private trySettleOrAuto(): void {
     if (this.s.autoFinishActive) {
-      this.runAutoFinish();
+      if (this.remainingAuto().length) {
+        this.s.phase = "reveal_auto";
+        return;
+      }
+      this.settle();
       return;
     }
     if (!this.activeNeedsDecision()) {
@@ -303,25 +356,35 @@ export class TenhalfEngine {
     }
   }
 
-  /** 有人亮五龙/十点半后，对其余未停自动发至终结 */
-  private runAutoFinish(): void {
+  /**
+   * 有人亮五龙/十点半后，其余未停玩家每次只自动摸一张，
+   * 由人机节拍驱动，方便客户端逐步展示。
+   */
+  stepAutoFinish(): boolean {
+    this.s.autoFinishActive = true;
     this.s.phase = "reveal_auto";
-    for (const p of this.s.players) {
-      if (p.stopped || p.busted || p.revealed) continue;
-      while (!p.stopped && !p.busted && !p.revealed && this.s.deck.length) {
-        const pts = handPoints(this.allCards(p));
-        // 自动策略：接近则停
-        if (pts >= this.s.config.botStopAt) {
-          p.stopped = true;
-          break;
-        }
-        const card = this.s.deck.pop()!;
-        p.open.push(card);
-        this.markSpecial(p);
-      }
-      if (!p.stopped && !p.busted) p.stopped = true;
+    const p = this.nextAutoPlayer();
+    if (!p) {
+      this.settle();
+      return true;
     }
-    this.settle();
+    this.s.currentSeat = p.seat;
+    if (!this.s.deck.length) {
+      p.stopped = true;
+      this.s.logs.push(`座位${p.seat} 牌堆已空，停牌`);
+      if (!this.remainingAuto().length) this.settle();
+      return true;
+    }
+    const card = this.s.deck.pop()!;
+    p.open.push(card);
+    this.s.logs.push(`座位${p.seat} 自动要牌 ${pokerLabel(card)}`);
+    this.markSpecial(p);
+    const cards = this.allCards(p);
+    if (!p.stopped && !p.busted && !p.revealed && cards.length >= 5) {
+      p.stopped = true;
+    }
+    if (!this.remainingAuto().length) this.settle();
+    return true;
   }
 
   private settle(): void {
@@ -501,7 +564,10 @@ export class TenhalfEngine {
 
   botAct(): boolean {
     if (this.s.phase === "draw_tie") return false;
-    if (this.s.autoFinishActive && this.s.phase === "reveal_auto") return false;
+    if (this.s.phase === "settled") return false;
+    if (this.s.autoFinishActive || this.s.phase === "reveal_auto") {
+      return this.stepAutoFinish();
+    }
     for (const p of this.s.players) {
       if (!p.isBot) continue;
       const acts = this.getAvailableActions(p.seat);

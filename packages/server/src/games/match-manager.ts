@@ -41,11 +41,18 @@ export class MatchManager {
     }
   }
 
-  start(room: RoomState): AnyEngine {
-    const check = this.lobby.canStart(room);
-    if (!check.ok) {
-      throw Object.assign(new Error(check.reason ?? "无法开始"), { code: "CANNOT_START" });
+  start(room: RoomState, opts?: { startSeat?: number; continueSeries?: boolean }): AnyEngine {
+    if (!opts?.continueSeries) {
+      const check = this.lobby.canStart(room);
+      if (!check.ok) {
+        throw Object.assign(new Error(check.reason ?? "无法开始"), { code: "CANNOT_START" });
+      }
     }
+    if (!opts?.continueSeries && room.phase === "waiting") {
+      this.lobby.resetMatchProgress(room);
+    }
+    this.clearOldMatch(room.roomId);
+
     const matchId = randomUUID();
     const seats = room.seats
       .filter((s) => s.userId)
@@ -73,6 +80,8 @@ export class MatchManager {
         room.roomId,
         room.config as TenhalfRoomConfig,
         seats,
+        Math.random,
+        opts?.startSeat,
       );
     }
 
@@ -138,7 +147,7 @@ export class MatchManager {
     if (engine.isFinished()) {
       const room = this.lobby.get(roomId);
       if (room) {
-        this.lobby.markSettled(room, engine.getScores());
+        this.lobby.markSettled(room, engine.getScores(), engine.getScoreEvents());
         this.lobby.bumpRound(room);
       }
       const matchId =
@@ -166,6 +175,7 @@ export class MatchManager {
   }
 
   private scheduleAutoNext(room: RoomState): void {
+    if (room.gameType === "mahjong") return;
     const max = this.maxRoundsOf(room);
     if (room.roundIndex >= max) return;
     setTimeout(() => {
@@ -183,6 +193,11 @@ export class MatchManager {
 
   scheduleBots(matchId: string): void {
     this.clearBotTimer(matchId);
+    const existing = this.matches.get(matchId);
+    const delay =
+      existing instanceof TenhalfEngine && existing.snapshotFor().phase === "reveal_auto"
+        ? 800
+        : 600;
     const timer = setTimeout(() => {
       const engine = this.matches.get(matchId);
       if (!engine || engine.isFinished()) return;
@@ -203,7 +218,7 @@ export class MatchManager {
         // 若仍轮到人机但未行动（如等待），再试
         this.scheduleBots(matchId);
       }
-    }, 600);
+    }, delay);
     this.botTimers.set(matchId, timer);
   }
 
@@ -234,12 +249,24 @@ export class MatchManager {
       return null;
     }
 
+    if (room.gameType === "mahjong") {
+      const humans = room.seats.filter((s) => s.userId && !s.isBot);
+      if (humans.some((s) => !s.ready)) {
+        throw Object.assign(new Error("需全体真人准备后才能开始下一局"), {
+          code: "NOT_READY",
+        });
+      }
+    }
+
     let dealer: number | undefined;
+    let tenhalfStart: number | undefined;
     const oldId = this.byRoom.get(room.roomId);
     if (oldId) {
       const old = this.matches.get(oldId);
       if (old instanceof MahjongEngine) {
         dealer = old.getWinnerSeat() ?? old.getDealerSeat();
+      } else if (old instanceof TenhalfEngine) {
+        tenhalfStart = old.getWinnerSeat() ?? old.getStartSeat();
       }
       this.clearBotTimer(oldId);
       this.matches.delete(oldId);
@@ -248,7 +275,7 @@ export class MatchManager {
     }
 
     if (room.gameType === "tenhalf") {
-      return this.start(room);
+      return this.start(room, { startSeat: tenhalfStart, continueSeries: true });
     }
 
     const cfg = room.config as MahjongRoomConfig;

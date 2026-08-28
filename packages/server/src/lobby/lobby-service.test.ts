@@ -64,3 +64,36 @@ describe("lobby leave", () => {
     }
   });
 });
+
+describe("match progress", () => {
+  it("resetMatchProgress clears rounds and scores", () => {
+    const { lobby, cleanup } = tmpLobby();
+    try {
+      const room = lobby.create("u1", "host", "mahjong", undefined, { botCount: 3 });
+      room.roundIndex = 4;
+      room.seats[0]!.score = 99;
+      lobby.resetMatchProgress(room);
+      assert.equal(room.roundIndex, 0);
+      assert.equal(room.seats[0]!.score, 0);
+      assert.deepEqual(room.roundResults, []);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("allows ready between mahjong rounds", () => {
+    const { lobby, cleanup } = tmpLobby();
+    try {
+      const room = lobby.create("u1", "host", "mahjong", undefined, { botCount: 3 });
+      lobby.markPlaying(room, "m1");
+      lobby.markSettled(room, [1, 0, 0, -1], []);
+      lobby.bumpRound(room);
+      assert.equal(room.seats[0]!.ready, false);
+      const after = lobby.setReady(room.roomId, "u1", true);
+      assert.equal(after.seats[0]!.ready, true);
+      assert.equal(lobby.canContinueMatch(after), true);
+    } finally {
+      cleanup();
+    }
+  });
+});

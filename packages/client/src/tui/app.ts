@@ -2,6 +2,7 @@ import blessed from "blessed";
 import {
   type MahjongRoomConfig,
   type RoomSummary,
+  type TableEvent,
   type TenhalfRoomConfig,
 } from "@yifun/qipai-shared";
 import type { QipaiClient } from "../ws/client.js";
@@ -11,16 +12,20 @@ import {
   createGameBoard,
   MJ_REST_BORDER,
   renderBigHand,
+  renderDiscardRiver,
   renderMelds,
-  renderSeatTiles,
+  renderOtherSeat,
   renderTiles,
+  type MjFxKind,
   type MjSeatSlot,
 } from "./board.js";
 import {
   formatMahjongActions,
   formatRoomConfig,
+  formatScoreBoard,
   gameTypeName,
   hostName,
+  mahjongActionName,
   mahjongPhaseName,
   phaseName,
 } from "./format.js";
@@ -38,8 +43,6 @@ interface AppState {
   cursor: number;
   lockedTileId: string | null;
 }
-
-type MjFxKind = "peng" | "hu" | "gang" | "wait";
 
 interface MjFx {
   kind: MjFxKind;
@@ -82,9 +85,11 @@ export async function runTui(client: QipaiClient): Promise<void> {
 
   let waitTick = 0;
   let pulseOn = false;
-  let lastSeenLog: string | undefined;
   let lastMatchId: string | undefined;
   let lastJustDrewId: string | undefined;
+  let lastEventSeq = 0;
+  let lastScoreModalKey = "";
+  let scoreModalOpen = false;
   let mjFx: MjFx | null = null;
   let fxHideTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -100,6 +105,37 @@ export async function runTui(client: QipaiClient): Promise<void> {
     scrollable: true,
     alwaysScroll: true,
     style: { border: { fg: "red" } },
+  });
+
+  const discardBox = blessed.box({
+    parent: screen,
+    top: 3,
+    left: "70%",
+    width: "30%",
+    height: "100%-6",
+    tags: true,
+    border: { type: "line" },
+    label: " 弃牌 ",
+    scrollable: true,
+    hidden: true,
+    style: { border: { fg: "yellow" } },
+  });
+
+  const scoreModal = blessed.box({
+    parent: screen,
+    top: "center",
+    left: "center",
+    width: "70%",
+    height: "80%",
+    tags: true,
+    border: { type: "line" },
+    label: " 对局积分 ",
+    hidden: true,
+    scrollable: true,
+    keys: true,
+    vi: true,
+    shadow: true,
+    style: { border: { fg: "yellow" } },
   });
 
   const footer = blessed.box({
@@ -138,11 +174,13 @@ export async function runTui(client: QipaiClient): Promise<void> {
     state.room = undefined;
     state.game = undefined;
     state.mode = "lobby";
-    lastSeenLog = undefined;
     lastMatchId = undefined;
     lastJustDrewId = undefined;
+    lastEventSeq = 0;
     mjFx = null;
     board.hideFx();
+    board.hideClaim();
+    closeScoreModal();
     if (refreshRooms) client.send("lobby.listRooms", {});
   }
 
@@ -150,6 +188,46 @@ export async function runTui(client: QipaiClient): Promise<void> {
     if (!room) return 0;
     if (room.gameType === "mahjong") return (room.config as MahjongRoomConfig).maxRounds;
     return (room.config as TenhalfRoomConfig).maxRounds;
+  }
+
+  function allRoundsDone(room?: RoomSummary, settled = false): boolean {
+    if (!room || !settled) return false;
+    const max = maxRoundsOf(room);
+    return max > 0 && room.roundIndex >= max;
+  }
+
+  function layoutSidePanel(): void {
+    if (state.mode === "mahjong") {
+      logBox.hide();
+      discardBox.show();
+    } else {
+      discardBox.hide();
+      logBox.show();
+    }
+  }
+
+  function openScoreModal(): void {
+    const room = state.room;
+    if (!room) return;
+    scoreModal.setContent(formatScoreBoard(room));
+    scoreModal.show();
+    scoreModal.setFront();
+    scoreModalOpen = true;
+    screen.render();
+  }
+
+  function closeScoreModal(): void {
+    if (!scoreModalOpen) return;
+    scoreModal.hide();
+    scoreModalOpen = false;
+  }
+
+  function maybeShowFinalScores(settled: boolean): void {
+    if (!allRoundsDone(state.room, settled)) return;
+    const key = `${state.room?.roomId}:${state.room?.matchId ?? ""}:${state.room?.roundIndex}`;
+    if (key === lastScoreModalKey) return;
+    lastScoreModalKey = key;
+    openScoreModal();
   }
 
   function renderHeader(): void {
@@ -166,18 +244,6 @@ export async function runTui(client: QipaiClient): Promise<void> {
     return "bottom";
   }
 
-  function newMahjongLogs(logs: string[]): string[] {
-    if (!logs.length) return [];
-    if (!lastSeenLog) {
-      lastSeenLog = logs[logs.length - 1];
-      return [];
-    }
-    const idx = logs.lastIndexOf(lastSeenLog);
-    const news = idx < 0 ? logs.slice(-6) : logs.slice(idx + 1);
-    lastSeenLog = logs[logs.length - 1];
-    return news;
-  }
-
   function triggerMjFx(kind: MjFxKind, title: string, sub?: string, ms = 1400): void {
     mjFx = { kind, title, sub, until: Date.now() + ms };
     board.showFx(kind, title, sub);
@@ -190,15 +256,44 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }, ms);
   }
 
-  function detectMahjongFx(logs: string[]): void {
-    for (const line of newMahjongLogs(logs)) {
-      if (line.includes("自摸") || (line.includes("胡") && !line.includes("无法"))) {
-        triggerMjFx("hu", "胡 牌", line, 5000);
-      } else if (line.includes("暗杠") || line.includes("明杠") || line.includes("碰后杠")) {
-        triggerMjFx("gang", "杠 牌", line, 4500);
-      } else if (line.includes("碰")) {
-        triggerMjFx("peng", "碰 牌", line, 4000);
-      }
+  function handleTableEvent(
+    ev: TableEvent | undefined,
+    players: Array<{ seat: number; username: string }>,
+  ): void {
+    if (!ev || ev.seq === lastEventSeq) return;
+    lastEventSeq = ev.seq;
+    const name = players.find((p) => p.seat === ev.seat)?.username ?? `座位${ev.seat + 1}`;
+    if (ev.kind === "discard") {
+      const art = ev.tile ? renderTiles([ev.tile], "last", { cols: 20 }) : "";
+      triggerMjFx("discard", `${name} 出牌`, art, 1800);
+      return;
+    }
+    if (ev.kind === "peng") triggerMjFx("peng", `${name} 碰`, ev.text, 1600);
+    else if (ev.kind === "mingGang" || ev.kind === "anGang" || ev.kind === "buGang") {
+      triggerMjFx("gang", `${name} 杠`, ev.text, 1800);
+    } else if (ev.kind === "hu" || ev.kind === "zimo") {
+      triggerMjFx("hu", ev.kind === "zimo" ? `${name} 自摸` : `${name} 胡牌`, ev.text, 4000);
+    } else if (ev.kind === "liuju") {
+      triggerMjFx("liuju", "流局", ev.text, 2500);
+    }
+  }
+
+  function claimKeyHint(action: string): string {
+    switch (action) {
+      case "peng":
+        return "p";
+      case "mingGang":
+        return "g";
+      case "hu":
+        return "h";
+      case "pass":
+        return "n";
+      case "anGang":
+        return "a";
+      case "buGang":
+        return "b";
+      default:
+        return "?";
     }
   }
 
@@ -234,15 +329,18 @@ export async function runTui(client: QipaiClient): Promise<void> {
 
   function renderMahjong(): void {
     board.showMahjong();
+    screen.render();
     const g = state.game as {
       players?: Array<{
         seat: number;
         username: string;
         isBot?: boolean;
         handCount: number;
-        discards: Array<{ suit: string; rank: number }>;
-        melds: Array<{ type: string; tiles: Array<{ suit: string; rank: number }> }>;
+        discards: Array<{ id?: string; suit: string; rank: number }>;
+        melds: Array<{ type: string; tiles: Array<{ id?: string; suit: string; rank: number }> }>;
+        hand?: Array<{ id?: string; suit: string; rank: number }>;
         score: number;
+        ready?: boolean;
       }>;
       selfHand?: Array<{ id: string; suit: string; rank: number }>;
       selfSeat?: number;
@@ -253,15 +351,15 @@ export async function runTui(client: QipaiClient): Promise<void> {
       deadWall?: number;
       phase?: string;
       availableActions?: string[];
-      lastDiscard?: { suit: string; rank: number };
+      lastDiscard?: { id?: string; suit: string; rank: number };
       lastDiscardSeat?: number;
       roundIndex?: number;
       maxRounds?: number;
-      logs?: string[];
       matchId?: string;
       claimOptions?: Array<{ seat: number; actions: string[] }>;
       claimResponses?: Record<string, string>;
       turnDeadlineAt?: number;
+      lastEvent?: TableEvent;
     };
     if (!g?.players) {
       board.mj.center.setContent("等待对局状态…");
@@ -269,11 +367,11 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }
     if (g.matchId && g.matchId !== lastMatchId) {
       lastMatchId = g.matchId;
-      lastSeenLog = undefined;
+      lastEventSeq = 0;
       const n = (g.roundIndex ?? 0) + 1;
-      triggerMjFx("wait", `第 ${n} 局开始`, "请准备", 4000);
+      triggerMjFx("wait", `第 ${n} 局开始`, "", 1600);
     }
-    detectMahjongFx(g.logs ?? []);
+    handleTableEvent(g.lastEvent, g.players);
 
     const self = g.selfSeat ?? 0;
     const order = [0, 1, 2, 3].map((i) => (self + i) % 4);
@@ -302,20 +400,49 @@ export async function runTui(client: QipaiClient): Promise<void> {
     };
 
     const sw = Number(screen.width);
+    const sh = Number(screen.height);
     const boardCols = Math.max(40, Math.floor((Number.isFinite(sw) && sw > 0 ? sw : 80) * 0.7) - 2);
+    const boardRows = Math.max(16, (Number.isFinite(sh) && sh > 0 ? sh : 30) - 6);
     const innerCols = (fraction: number) => Math.max(16, Math.floor(boardCols * fraction) - 2);
-    const boxCols = (box: { width: string | number; lpos?: { xi: number; xl: number } }, fallback: number) => {
+    const boxSize = (
+      box: { width: string | number; height: string | number; lpos?: { xi: number; xl: number; yi: number; yl: number } },
+      fallbackCols: number,
+      fallbackRows: number,
+    ) => {
       const lp = box.lpos;
-      if (lp && lp.xl - lp.xi > 6) return lp.xl - lp.xi - 2;
-      const w = box.width;
-      return typeof w === "number" && w > 6 ? w - 2 : fallback;
+      const cols =
+        lp && lp.xl - lp.xi > 6
+          ? lp.xl - lp.xi - 2
+          : typeof box.width === "number" && box.width > 6
+            ? box.width - 2
+            : fallbackCols;
+      const rows =
+        lp && lp.yl - lp.yi > 4
+          ? lp.yl - lp.yi - 2
+          : typeof box.height === "number" && box.height > 4
+            ? box.height - 2
+            : fallbackRows;
+      return { cols, rows };
     };
+
+    const settled = g.phase === "settled" || g.phase === "liuju";
+    const roundDone = state.room?.roundIndex ?? g.roundIndex ?? 0;
+    const maxR = state.room ? maxRoundsOf(state.room) : (g.maxRounds ?? 0);
+    const allDone = settled && maxR > 0 && roundDone >= maxR;
+    const currentName = g.players.find((p) => p.seat === g.currentSeat)?.username ?? "";
+    const myTurn = g.currentSeat === self && (g.phase === "discard" || g.phase === "draw");
+    const myClaim = g.phase === "claim" && pendingClaims.includes(self);
+    const myActs = g.availableActions ?? [];
+    const claimActs = myActs.filter((a) =>
+      ["peng", "mingGang", "hu", "pass", "anGang", "buGang"].includes(a),
+    );
 
     const fmtOther = (
       p: (typeof top),
       tag: string,
       box: typeof board.mj.top,
       fallbackCols: number,
+      fallbackRows: number,
     ) => {
       const dealer = g.dealerSeat === p.seat ? "{yellow-fg}庄{/}" : "";
       const isTurn = g.currentSeat === p.seat && g.phase !== "claim";
@@ -328,35 +455,27 @@ export async function runTui(client: QipaiClient): Promise<void> {
       const name = isTurn || isClaim ? `{bold}{red-fg}${p.username}{/}` : p.username;
       const waitHint = isTurn ? `{red-fg}等待出牌${dots}{/}` : isClaim ? `{magenta-fg}等待响应${dots}{/}` : "";
       const clock = !p.isBot && (isTurn || isClaim) ? clockText() : "";
-      const cols = boxCols(box, fallbackCols);
+      const { cols, rows } = boxSize(box, fallbackCols, fallbackRows);
       const waitLine = [waitHint, clock].filter(Boolean).join("  ");
       box.setLabel(` ${tag} - ${seatWind(p.seat)}风 `);
       box.setContent(
         [
-          `${turnMark}${dealer} ${name}  分${p.score}  手牌${p.handCount}${waitLine ? `  ${waitLine}` : ""}`,
-          renderSeatTiles(p.melds, p.discards, cols, tag === "对家" ? "row" : "stack"),
+          `${turnMark}${dealer} ${name}  分${p.score}${waitLine ? `  ${waitLine}` : ""}`,
+          renderOtherSeat(p.melds, p.handCount, p.hand, cols, Math.max(2, rows - 1)),
         ].join("\n"),
       );
     };
 
-    fmtOther(top, "对家", board.mj.top, innerCols(1));
-    fmtOther(left, "上家", board.mj.left, innerCols(0.3));
-    fmtOther(right, "下家", board.mj.right, innerCols(0.3));
-
-    const roundDone = state.room?.roundIndex ?? g.roundIndex ?? 0;
-    const maxR = state.room ? maxRoundsOf(state.room) : (g.maxRounds ?? 0);
-    const settled = g.phase === "settled" || g.phase === "liuju";
-    const allDone = settled && maxR > 0 && roundDone >= maxR;
-    const currentName = g.players.find((p) => p.seat === g.currentSeat)?.username ?? "";
-    const myTurn = g.currentSeat === self && (g.phase === "discard" || g.phase === "draw");
-    const myClaim = g.phase === "claim" && pendingClaims.includes(self);
+    fmtOther(top, "对家", board.mj.top, innerCols(1), Math.max(4, Math.floor(boardRows * 0.24) - 1));
+    fmtOther(left, "上家", board.mj.left, innerCols(0.3), Math.max(4, Math.floor(boardRows * 0.36) - 1));
+    fmtOther(right, "下家", board.mj.right, innerCols(0.3), Math.max(4, Math.floor(boardRows * 0.36) - 1));
 
     let turnLine: string;
     if (settled) {
-      turnLine = "本局已结束";
+      turnLine = allDone ? "{green-fg}全部局结束{/}" : "本局已结束，等待真人准备";
     } else if (g.phase === "claim") {
       turnLine = myClaim
-        ? `{magenta-fg}{bold}轮到你：可碰 / 杠 / 胡${dots}{/}`
+        ? `{magenta-fg}{bold}可碰 / 杠 / 胡${dots}{/}`
         : `{cyan-fg}等待其他玩家响应鸣牌${dots}{/}`;
     } else if (myTurn) {
       turnLine = `{green-fg}{bold}轮到你出牌${dots}{/}`;
@@ -364,20 +483,46 @@ export async function runTui(client: QipaiClient): Promise<void> {
       turnLine = `{yellow-fg}等待 {bold}${currentName}{/bold} 出牌${dots}{/}`;
     }
 
-    const centerCols = boxCols(board.mj.center, innerCols(0.4));
-    const bottomCols = boxCols(board.mj.bottom, innerCols(1));
+    const readyLine =
+      settled && !allDone
+        ? (state.room?.seats ?? [])
+            .filter((s) => s.userId && !s.isBot)
+            .map((s) => `${s.username}${s.ready ? "{green-fg}✓{/}" : "{red-fg}…{/}"}`)
+            .join("  ")
+        : "";
+
     board.mj.center.setContent(
       [
         `进度: 第 {bold}${Math.min(roundDone + (settled ? 0 : 1), maxR || 1)}{/} / ${maxR || "?"} 局`,
         `阶段: {cyan-fg}${mahjongPhaseName(g.phase)}{/}   牌墙: {cyan-fg}${g.wallRemaining}{/}  死牌: ${g.deadWall}`,
         turnLine,
-        "",
-        "上一次出牌",
-        g.lastDiscard ? renderTiles([g.lastDiscard], "last", { cols: centerCols }) : "-",
-      ].join("\n"),
+        readyLine ? `准备: ${readyLine}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
 
-    const handArt = renderBigHand(hand, state.cursor, state.lockedTileId, g.justDrew?.id, bottomCols);
+    const discSize = boxSize(discardBox, Math.max(12, Math.floor((Number.isFinite(sw) && sw > 0 ? sw : 80) * 0.3) - 2), boardRows);
+    discardBox.setContent(
+      renderDiscardRiver(
+        [top, left, right, bottom].map((p, i) => ({
+          name: `${["对家", "上家", "下家", "自家"][i]} ${p.username}`,
+          discards: p.discards,
+        })),
+        discSize.cols,
+        discSize.rows,
+      ),
+    );
+
+    const bottomSize = boxSize(board.mj.bottom, innerCols(1), Math.max(6, Math.floor(boardRows * 0.4) - 1));
+    const handArt = renderBigHand(
+      hand,
+      state.cursor,
+      state.lockedTileId,
+      g.justDrew?.id,
+      bottomSize.cols,
+      Math.max(4, bottomSize.rows - 6),
+    );
 
     const dealer = g.dealerSeat === bottom.seat ? "{yellow-fg}庄{/}" : "";
     const myBanner = myTurn
@@ -386,19 +531,22 @@ export async function runTui(client: QipaiClient): Promise<void> {
         ? "{black-fg}{magenta-bg} 可鸣牌 {/} "
         : "";
     const name = myTurn || myClaim ? `{bold}{green-fg}${bottom.username}{/}` : bottom.username;
-    const myMelds = renderMelds(bottom.melds, bottomCols);
+    const myMelds = renderMelds(bottom.melds, bottomSize.cols, "hand", 4);
 
     let bottomExtra = "";
     if (allDone) {
-      bottomExtra = "\n{bold}全部局结束 — 累计分见座位分{/bold}\nx 回等待房   l 离开";
+      bottomExtra = "\n{bold}全部局结束{/bold}  v查看积分  x回等待房  l离开";
     } else if (settled) {
-      bottomExtra = "\n本局结束，即将自动进入下一局…  (n手动续局)";
+      const meReady = state.room?.seats.find((s) => s.seat === self)?.ready;
+      bottomExtra = meReady
+        ? "\n已准备，等待其他真人按 y"
+        : "\n{yellow-fg}按 y 准备下一局{/}  （全体真人准备后开始）";
     } else if (myTurn) {
       bottomExtra = state.lockedTileId
         ? "\n已锁定，再按空格出牌 / Esc取消"
-        : "\n←→选牌  空格锁定  再空格出牌  |  p碰 g明杠 h胡 a暗杠 b补杠 n过";
+        : "\n←→选牌  空格锁定  再空格出牌";
     } else if (myClaim) {
-      bottomExtra = "\n{magenta-fg}可操作：p碰 g明杠 h胡 n过{/}";
+      bottomExtra = "";
     } else {
       bottomExtra = `\n{yellow-fg}等待中${dots} 当前由 ${currentName} 行动{/}`;
     }
@@ -418,15 +566,29 @@ export async function runTui(client: QipaiClient): Promise<void> {
       ].join("\n"),
     );
 
+    if ((myClaim || (myTurn && claimActs.some((a) => a !== "discard"))) && claimActs.length) {
+      const lines = [
+        "{bold}请选择{/}",
+        ...claimActs.map((a) => ` {yellow-fg}${claimKeyHint(a)}{/}  ${mahjongActionName(a)}`),
+      ];
+      board.showClaim(lines);
+    } else {
+      board.hideClaim();
+    }
+
     paintMahjongTurn(self, g.currentSeat, g.phase, pendingClaims);
     if (mjFx && Date.now() < mjFx.until) {
       board.showFx(mjFx.kind, mjFx.title, mjFx.sub);
     }
 
+    maybeShowFinalScores(settled);
+
     footer.setContent(
       allDone
-        ? "{bold}麻将{/bold}  全部局结束 | x回等待  l离开房间  q退出"
-        : `{bold}麻将{/bold}  ${mahjongPhaseName(g.phase)} | 空格出牌 | p碰 g明杠 h胡 | l离开房间  q退出`,
+        ? "{bold}麻将{/bold}  全部局结束 | v积分  x回等待  l离开  q退出"
+        : settled
+          ? "{bold}麻将{/bold}  本局结束 | y准备下一局  v积分  l离开  q退出"
+          : `{bold}麻将{/bold}  ${mahjongPhaseName(g.phase)} | 空格出牌 | p碰 g明杠 h胡 | l离开  q退出`,
     );
   }
 
@@ -491,7 +653,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
         continue;
       }
       const turn = !settled && g.currentSeat === p.seat ? "{green-fg}>{/}" : " ";
-      const bank = g.bankerSeat === p.seat ? "{yellow-fg}庄{/}" : "";
+      const showBank = g.mode === "banker" && g.bankerSeat === p.seat;
       const st = p.busted ? "{red-fg}炸{/}" : p.stopped ? "停" : "…";
       const hole = p.hole ? colorPoker(p.hole) : "??";
       const open = p.open.map(colorPoker).join(" ");
@@ -502,7 +664,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
             ? `{red-fg}${p.score}{/}`
             : `${p.score}`;
       const roomScore = state.room?.seats.find((s) => s.seat === p.seat)?.score;
-      box.setLabel(` ${p.username}${bank ? "·庄" : ""} `);
+      box.setLabel(` ${p.username}${showBank ? "·庄" : ""} `);
       box.setContent(
         [
           `${turn}${st} ${strengthText(p.strength)} ${p.points ?? "?"}点  本局${scoreStr}  累计${roomScore ?? 0}`,
@@ -512,8 +674,9 @@ export async function runTui(client: QipaiClient): Promise<void> {
     }
 
     if (allDone) {
-      board.th.hint.setContent("{bold}全部局结束{/bold}  看累计分  |  x回等待房  l离开");
-      footer.setContent("{bold}十点半{/bold}  全部结束 | x回等待  l离开");
+      board.th.hint.setContent("{bold}全部局结束{/bold}  v查看积分  |  x回等待房  l离开");
+      footer.setContent("{bold}十点半{/bold}  全部结束 | v积分  x回等待  l离开");
+      maybeShowFinalScores(true);
     } else if (settled) {
       board.th.hint.setContent("本局结束，即将自动下一局…  (也可按 n)");
       footer.setContent("{bold}十点半{/bold}  结算中 | n续局  x回等待  l离开");
@@ -576,6 +739,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
       .join("\n");
 
     const finished = r.phase === "settled" && r.roundIndex >= maxRoundsOf(r);
+    const hasScores = (r.roundResults?.length ?? 0) > 0;
     main.setContent(
       [
         `{bold}房间 ${r.name}{/bold}  (${r.roomId})`,
@@ -588,13 +752,19 @@ export async function runTui(client: QipaiClient): Promise<void> {
         seats,
         "",
         finished
-          ? "{bold}全部局已结束，上方为累计总分{/bold}"
-          : "提示: 等待中可按 {yellow-fg}c{/} 配置玩法（局数/牌数/锅底等）",
+          ? "{bold}全部局已结束{/bold}  按 v 查看排名与分局明细"
+          : hasScores
+            ? "按 v 可查看上一场积分  |  等待中可按 {yellow-fg}c{/} 配置玩法"
+            : "提示: 等待中可按 {yellow-fg}c{/} 配置玩法（局数/牌数/锅底等）",
         "y准备  u取消准备  b加人机  d移除人机  t转让房主  c配置",
         "s开始  n续局/统分后回等待  x回等待  l离开",
       ].join("\n"),
     );
-    footer.setContent("房间: c配置  y/u准备  b/d人机  t房主  s开始  l离开");
+    footer.setContent(
+      hasScores
+        ? "房间: v积分  c配置  y/u准备  b/d人机  t房主  s开始  l离开"
+        : "房间: c配置  y/u准备  b/d人机  t房主  s开始  l离开",
+    );
   }
 
   function renderLogin(): void {
@@ -614,11 +784,13 @@ export async function runTui(client: QipaiClient): Promise<void> {
 
   function render(): void {
     renderHeader();
+    layoutSidePanel();
     if (state.mode === "login") renderLogin();
     else if (state.mode === "lobby") renderLobby();
     else if (state.mode === "room") renderRoom();
     else if (state.mode === "mahjong") renderMahjong();
     else if (state.mode === "tenhalf") renderTenhalf();
+    if (scoreModalOpen) scoreModal.setFront();
     screen.render();
   }
 
@@ -814,6 +986,11 @@ export async function runTui(client: QipaiClient): Promise<void> {
   });
 
   screen.key(["escape"], () => {
+    if (scoreModalOpen) {
+      closeScoreModal();
+      screen.render();
+      return;
+    }
     if (state.lockedTileId) {
       state.lockedTileId = null;
       log("取消锁定");
@@ -827,6 +1004,11 @@ export async function runTui(client: QipaiClient): Promise<void> {
   });
 
   screen.key(["enter"], async () => {
+    if (scoreModalOpen) {
+      closeScoreModal();
+      screen.render();
+      return;
+    }
     if (state.mode === "login") await doLogin();
   });
 
@@ -844,6 +1026,7 @@ export async function runTui(client: QipaiClient): Promise<void> {
   });
 
   screen.key(["space"], () => {
+    if (scoreModalOpen) return;
     if (state.mode !== "mahjong") return;
     const g = state.game as {
       selfHand?: Array<{ id: string }>;
@@ -936,12 +1119,10 @@ export async function runTui(client: QipaiClient): Promise<void> {
   });
 
   screen.key(["n"], () => {
+    if (scoreModalOpen) return;
     if (state.mode === "mahjong") {
       const phase = (state.game as { phase?: string } | undefined)?.phase;
-      if (phase === "settled" || phase === "liuju") {
-        client.send("room.nextRound", {});
-        return;
-      }
+      if (phase === "settled" || phase === "liuju") return;
       client.send("game.action", { action: "pass", data: {} });
       return;
     }
@@ -973,7 +1154,26 @@ export async function runTui(client: QipaiClient): Promise<void> {
   });
 
   screen.key(["y"], () => {
-    if (state.mode === "room") client.send("room.ready", { ready: true });
+    if (state.mode === "room") {
+      client.send("room.ready", { ready: true });
+      return;
+    }
+    if (state.mode === "mahjong") {
+      const phase = (state.game as { phase?: string } | undefined)?.phase;
+      if (phase === "settled" || phase === "liuju") {
+        client.send("room.ready", { ready: true });
+      }
+    }
+  });
+  screen.key(["v"], () => {
+    if (scoreModalOpen) {
+      closeScoreModal();
+      screen.render();
+      return;
+    }
+    if (state.room && (state.room.roundResults?.length || state.room.phase === "settled")) {
+      openScoreModal();
+    }
   });
   screen.key(["u"], () => {
     if (state.mode === "room") client.send("room.ready", { ready: false });

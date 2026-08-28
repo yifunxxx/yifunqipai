@@ -5,7 +5,9 @@ import type {
   RoomConfig,
   RoomPhase,
   RoomSummary,
+  RoundScoreLine,
   SeatInfo,
+  ScoreEvent,
   TenhalfRoomConfig,
 } from "@yifun/qipai-shared";
 import type { Store } from "../db/store.js";
@@ -21,6 +23,7 @@ export interface RoomState {
   config: RoomConfig;
   matchId?: string;
   roundIndex: number;
+  roundResults: RoundScoreLine[];
 }
 
 function defaultMahjongConfig(partial?: Partial<MahjongRoomConfig>): MahjongRoomConfig {
@@ -51,6 +54,7 @@ export class LobbyService {
     for (const row of store.loadAllRooms()) {
       try {
         const r = JSON.parse(row.data_json) as RoomState;
+        if (!r.roundResults) r.roundResults = [];
         this.rooms.set(r.roomId, r);
       } catch {
         /* skip corrupt */
@@ -82,6 +86,7 @@ export class LobbyService {
       config: room.config,
       matchId: room.matchId,
       roundIndex: room.roundIndex,
+      roundResults: room.roundResults ?? [],
     };
   }
 
@@ -133,6 +138,7 @@ export class LobbyService {
       maxSeats,
       config,
       roundIndex: 0,
+      roundResults: [],
     };
 
     // 初始人机
@@ -297,7 +303,11 @@ export class LobbyService {
   setReady(roomId: string, userId: string, ready: boolean): RoomState {
     const room = this.rooms.get(roomId);
     if (!room) throw Object.assign(new Error("房间不存在"), { code: "ROOM_NOT_FOUND" });
-    if (room.phase !== "waiting") {
+    const mahjongBetween =
+      room.phase === "settled" &&
+      room.gameType === "mahjong" &&
+      room.roundIndex < (room.config as MahjongRoomConfig).maxRounds;
+    if (room.phase !== "waiting" && !mahjongBetween) {
       throw Object.assign(new Error("对局中无法改准备状态"), { code: "ROOM_BUSY" });
     }
     const seat = room.seats.find((s) => s.userId === userId);
@@ -371,22 +381,53 @@ export class LobbyService {
     return { ok: true };
   }
 
+  /** 麻将小局结束后，全体真人已准备则可开下一局 */
+  canContinueMatch(room: RoomState): boolean {
+    if (room.phase !== "settled") return false;
+    if (room.gameType !== "mahjong") return false;
+    if (room.roundIndex >= (room.config as MahjongRoomConfig).maxRounds) return false;
+    const humans = room.seats.filter((s) => s.userId && !s.isBot);
+    return humans.length > 0 && humans.every((s) => s.ready);
+  }
+
   markPlaying(room: RoomState, matchId: string): void {
     room.phase = "playing";
     room.matchId = matchId;
     this.persist(room);
   }
 
-  markSettled(room: RoomState, scores: number[]): void {
+  markSettled(room: RoomState, scores: number[], events: ScoreEvent[] = []): void {
     room.phase = "settled";
     room.seats.forEach((s, i) => {
       if (scores[i] !== undefined) s.score += scores[i]!;
     });
+    if (!room.roundResults) room.roundResults = [];
+    room.roundResults.push({
+      round: room.roundIndex + 1,
+      deltas: room.seats.map((_, i) => scores[i] ?? 0),
+      events,
+    });
+    if (room.gameType === "mahjong") {
+      const max = (room.config as MahjongRoomConfig).maxRounds;
+      if (room.roundIndex + 1 < max) {
+        for (const s of room.seats) {
+          if (!s.isBot) s.ready = false;
+        }
+      }
+    }
     this.persist(room);
   }
 
   bumpRound(room: RoomState): void {
     room.roundIndex += 1;
+    this.persist(room);
+  }
+
+  /** 从等待房开新一场：局数与累计分归零 */
+  resetMatchProgress(room: RoomState): void {
+    room.roundIndex = 0;
+    room.roundResults = [];
+    for (const s of room.seats) s.score = 0;
     this.persist(room);
   }
 

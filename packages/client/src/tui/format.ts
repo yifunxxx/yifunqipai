@@ -148,3 +148,41 @@ export function hostName(room: RoomSummary): string {
   const host = room.seats.find((s) => s.userId === room.hostUserId);
   return host?.username || "未知";
 }
+
+function scoreText(n: number): string {
+  if (n > 0) return `{green-fg}+${n}{/}`;
+  if (n < 0) return `{red-fg}${n}{/}`;
+  return "0";
+}
+
+/** 终场排名 + 分局明细 */
+export function formatScoreBoard(room: RoomSummary): string {
+  const occupied = room.seats.filter((s) => s.userId);
+  const ranked = [...occupied].sort((a, b) => b.score - a.score || a.seat - b.seat);
+  const rankLines = ranked.map((s, i) => {
+    const tag = s.isBot ? "[人机]" : "";
+    return `  ${String(i + 1).padStart(2)}  ${s.username}${tag}  ${scoreText(s.score)}`;
+  });
+  const results = room.roundResults ?? [];
+  const detail = results.map((r) => {
+    const deltas = occupied
+      .map((s) => {
+        const d = r.deltas[s.seat] ?? 0;
+        return `${s.username} ${scoreText(d)}`;
+      })
+      .join("   ");
+    const ev = (r.events ?? []).map((e) => `    · ${e.description}`).join("\n");
+    return [`  {bold}第 ${r.round} 局{/}`, `    ${deltas}`, ev].filter(Boolean).join("\n");
+  });
+  return [
+    "{bold}本场结算{/bold}",
+    "",
+    "排名  玩家  总分",
+    ...(rankLines.length ? rankLines : ["  （无）"]),
+    "",
+    "{bold}分局明细{/bold}",
+    ...(detail.length ? detail : ["  （暂无）"]),
+    "",
+    "Enter / Esc / v 关闭",
+  ].join("\n");
+}

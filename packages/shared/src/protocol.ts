@@ -63,6 +63,13 @@ export interface SeatInfo {
   score: number;
 }
 
+/** 一局的分数明细（用于终场排名弹窗） */
+export interface RoundScoreLine {
+  round: number;
+  deltas: number[];
+  events: ScoreEvent[];
+}
+
 export interface RoomSummary {
   roomId: string;
   name: string;
@@ -75,6 +82,8 @@ export interface RoomSummary {
   matchId?: string;
   /** 已完成局数 */
   roundIndex: number;
+  /** 本场各局分差与事件，重新开始后清空 */
+  roundResults?: RoundScoreLine[];
 }
 
 export interface RoomCreatePayload {
@@ -140,6 +149,15 @@ export interface ScoreEvent {
   description: string;
   deltas: Array<{ seat: number; delta: number }>;
   at: number;
+}
+
+/** 麻将桌面通知（出牌/碰杠胡/流局），客户端按 seq 去重弹窗 */
+export interface TableEvent {
+  seq: number;
+  kind: "discard" | "peng" | "mingGang" | "anGang" | "buGang" | "hu" | "zimo" | "liuju";
+  seat: number;
+  text: string;
+  tile?: { id: string; suit: string; rank: number };
 }
 
 export const PROTOCOL_VERSION = 1;

@@ -13,6 +13,7 @@ import {
   type MahjongRoomConfig,
   type Meld,
   type ScoreEvent,
+  type TableEvent,
   type Tile,
 } from "@yifun/qipai-shared";
 
@@ -33,6 +34,8 @@ export interface MahjongPlayerPublic {
   melds: Meld[];
   score: number;
   connected: boolean;
+  /** 胡牌/流局后公开手牌 */
+  hand?: Tile[];
 }
 
 export interface MahjongPlayerState {
@@ -83,6 +86,7 @@ export interface MahjongSnapshot {
   maxRounds: number;
   /** 真人出牌/鸣牌截止时间（仅至少两名真人对局） */
   turnDeadlineAt?: number;
+  lastEvent?: TableEvent;
 }
 
 export const HUMAN_TURN_MS = 60_000;
@@ -110,6 +114,8 @@ interface InternalState {
   justDrew?: Tile;
   pendingBuGang?: { seat: number; tile: Tile };
   turnDeadlineAt?: number;
+  eventSeq: number;
+  lastEvent?: TableEvent;
 }
 
 function rollDealer(rng: () => number): number {
@@ -171,6 +177,7 @@ export class MahjongEngine {
       logs: [`第 ${roundIndex + 1} 局开始，庄家座位 ${dealer}`],
       scoreEvents: [],
       roundIndex,
+      eventSeq: 0,
     };
 
     this.drawForCurrent();
@@ -189,6 +196,7 @@ export class MahjongEngine {
             Object.entries(data.claimResponses ?? {}).map(([k, v]) => [Number(k), v]),
           );
     eng.s = { ...(data as unknown as InternalState), claimResponses: responses };
+    if (typeof eng.s.eventSeq !== "number") eng.s.eventSeq = 0;
     return eng;
   }
 
@@ -209,10 +217,31 @@ export class MahjongEngine {
     return drawableCount(this.s.wall.length, this.s.config.tileCount, this.s.gangCount) > 0;
   }
 
+  private emitEvent(
+    kind: TableEvent["kind"],
+    seat: number,
+    text: string,
+    tile?: Tile,
+  ): void {
+    this.s.eventSeq += 1;
+    this.s.lastEvent = {
+      seq: this.s.eventSeq,
+      kind,
+      seat,
+      text,
+      tile,
+    };
+  }
+
+  private playerName(seat: number): string {
+    return this.s.players[seat]?.username ?? `座位${seat}`;
+  }
+
   private drawForCurrent(): void {
     if (!this.canDraw()) {
       this.s.phase = "liuju";
       this.s.logs.push("流局（牌墙摸尽，庄家继续）");
+      this.emitEvent("liuju", this.s.dealerSeat, "流局（牌墙摸尽，庄家连庄）");
       return;
     }
     const tile = this.s.wall.pop()!;
@@ -257,6 +286,7 @@ export class MahjongEngine {
   snapshotFor(viewerUserId?: string): MahjongSnapshot {
     const self = this.s.players.find((p) => p.userId === viewerUserId);
     const dead = this.deadWallSize();
+    const revealHands = this.s.phase === "settled" || this.s.phase === "liuju";
     return {
       matchId: this.s.matchId,
       roomId: this.s.roomId,
@@ -283,6 +313,7 @@ export class MahjongEngine {
         melds: p.melds,
         score: p.score,
         connected: p.connected,
+        hand: revealHands ? p.hand : undefined,
       })),
       selfHand: self ? self.hand : undefined,
       selfSeat: self?.seat,
@@ -295,6 +326,7 @@ export class MahjongEngine {
       roundIndex: this.s.roundIndex,
       maxRounds: this.s.config.maxRounds,
       turnDeadlineAt: this.s.turnDeadlineAt,
+      lastEvent: this.s.lastEvent,
     };
   }
 
@@ -304,6 +336,10 @@ export class MahjongEngine {
 
   getScores(): number[] {
     return this.s.players.map((p) => p.score);
+  }
+
+  getScoreEvents(): ScoreEvent[] {
+    return this.s.scoreEvents;
   }
 
   getDealerSeat(): number {
@@ -436,6 +472,7 @@ export class MahjongEngine {
     this.s.justDrew = undefined;
     p.hand = sortTiles(p.hand);
     this.s.logs.push(`座位${seat} 打出 ${tileKey(tile!)}`);
+    this.emitEvent("discard", seat, `${this.playerName(seat)} 打出`, tile);
 
     // 收集吃碰杠胡（无吃）
     const options: ClaimOption[] = [];
@@ -522,6 +559,7 @@ export class MahjongEngine {
       this.s.claimOptions = [];
       this.s.claimResponses = new Map();
       this.s.logs.push(`座位${best.seat} 碰`);
+      this.emitEvent("peng", best.seat, `${this.playerName(best.seat)} 碰`, tile);
       return;
     }
     if (best.action === "mingGang") {
@@ -536,6 +574,7 @@ export class MahjongEngine {
         "mingGang",
         `座位${best.seat} 明杠，座位${from} 付 ${base}`,
       );
+      this.emitEvent("mingGang", best.seat, `${this.playerName(best.seat)} 明杠`, tile);
       this.s.gangCount += 1;
       this.s.currentSeat = best.seat;
       this.s.claimOptions = [];
@@ -599,6 +638,11 @@ export class MahjongEngine {
     this.s.huType = hu.patterns.join(",");
     this.s.phase = "settled";
     this.s.dealerSeat = winner; // 赢家坐庄
+    this.emitEvent(
+      zimo ? "zimo" : "hu",
+      winner,
+      `${this.playerName(winner)} ${zimo ? "自摸" : "胡"} (${hu.patterns.join(",")})`,
+    );
   }
 
   private doAnGang(seat: number, tileId: string): void {
@@ -623,6 +667,7 @@ export class MahjongEngine {
       "anGang",
       `座位${seat} 暗杠，其余各付 ${2 * base}`,
     );
+    this.emitEvent("anGang", seat, `${this.playerName(seat)} 暗杠`);
     this.s.gangCount += 1;
     this.s.phase = "draw";
     p.hand = sortTiles(p.hand);
@@ -654,6 +699,7 @@ export class MahjongEngine {
       "buGang",
       `座位${seat} 碰后杠，其余各付 ${base}`,
     );
+    this.emitEvent("buGang", seat, `${this.playerName(seat)} 碰后杠`);
     this.s.gangCount += 1;
     this.s.phase = "draw";
     p.hand = sortTiles(p.hand);

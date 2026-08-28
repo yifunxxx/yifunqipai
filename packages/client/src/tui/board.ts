@@ -1,6 +1,6 @@
 import blessed from "blessed";
 import type { Widgets } from "blessed";
-import { pokerLabel, tileColorHint } from "@yifun/qipai-shared";
+import { pokerLabel, tileColorHint, tileGlyph } from "@yifun/qipai-shared";
 
 type Screen = Widgets.Screen;
 type Box = Widgets.BoxElement;
@@ -25,6 +25,7 @@ export interface GameBoard {
     right: Box;
     bottom: Box;
     fx: Box;
+    claim: Box;
   };
   th: {
     info: Box;
@@ -35,9 +36,13 @@ export interface GameBoard {
   showMahjong(): void;
   showTenhalf(seatCount: number): void;
   setMjBorder(slot: MjSeatSlot | "center", color: string, bold?: boolean): void;
-  showFx(kind: "peng" | "hu" | "gang" | "wait", title: string, sub?: string): void;
+  showFx(kind: MjFxKind, title: string, sub?: string): void;
   hideFx(): void;
+  showClaim(lines: string[]): void;
+  hideClaim(): void;
 }
+
+export type MjFxKind = "peng" | "hu" | "gang" | "wait" | "discard" | "liuju";
 
 /** 创建主区棋盘（麻将四家分区 + 十点半座位格） */
 export function createGameBoard(parent: Screen): GameBoard {
@@ -135,14 +140,28 @@ export function createGameBoard(parent: Screen): GameBoard {
     parent: root,
     top: "center",
     left: "center",
-    width: 36,
-    height: 8,
+    width: 40,
+    height: 10,
     tags: true,
     align: "center",
     valign: "middle",
     border: { type: "line" },
     hidden: true,
     shadow: true,
+  });
+
+  const mjClaim = blessed.box({
+    parent: root,
+    bottom: 1,
+    right: 1,
+    width: 22,
+    height: 10,
+    tags: true,
+    border: { type: "line" },
+    label: " 操作 ",
+    hidden: true,
+    shadow: true,
+    style: { border: { fg: "magenta" }, bg: "black" },
   });
 
   const thInfo = blessed.box({
@@ -202,6 +221,7 @@ export function createGameBoard(parent: Screen): GameBoard {
   function hideAll(): void {
     textMain.hide();
     for (const b of mjAll) b.hide();
+    mjClaim.hide();
     thInfo.hide();
     thHint.hide();
     for (const b of thSeats) b.hide();
@@ -213,30 +233,46 @@ export function createGameBoard(parent: Screen): GameBoard {
     box.style.bold = bold;
   }
 
-  function showFx(kind: "peng" | "hu" | "gang" | "wait", title: string, sub?: string): void {
-    const palette: Record<typeof kind, { border: string; bg: string; fg: string }> = {
+  function showFx(kind: MjFxKind, title: string, sub?: string): void {
+    const palette: Record<MjFxKind, { border: string; bg: string; fg: string }> = {
       peng: { border: "magenta", bg: "magenta", fg: "white" },
       hu: { border: "yellow", bg: "yellow", fg: "black" },
       gang: { border: "red", bg: "red", fg: "white" },
       wait: { border: "cyan", bg: "black", fg: "cyan" },
+      discard: { border: "white", bg: "black", fg: "white" },
+      liuju: { border: "white", bg: "black", fg: "white" },
     };
     const p = palette[kind];
     mjFx.style.border = { fg: p.border };
     mjFx.style.bg = p.bg;
     mjFx.style.fg = p.fg;
-    const star = kind === "wait" ? "·" : "*";
-    mjFx.setContent(
-      [
-        `{bold}${star}  ${title}  ${star}{/}`,
-        sub ? sub : "",
-      ].join("\n"),
-    );
+    const star = kind === "wait" || kind === "liuju" ? "·" : "*";
+    const lines = [`{bold}${star}  ${title}  ${star}{/}`, sub ? sub : ""];
+    const extra = sub ? sub.split("\n").length : 0;
+    mjFx.height = Math.min(16, Math.max(8, 5 + extra));
+    mjFx.width = kind === "discard" ? 28 : 40;
+    mjFx.setContent(lines.join("\n"));
     mjFx.show();
     mjFx.setFront();
   }
 
   function hideFx(): void {
     mjFx.hide();
+  }
+
+  function showClaim(lines: string[]): void {
+    if (!lines.length) {
+      mjClaim.hide();
+      return;
+    }
+    mjClaim.height = Math.min(12, Math.max(5, lines.length + 2));
+    mjClaim.setContent(lines.join("\n"));
+    mjClaim.show();
+    mjClaim.setFront();
+  }
+
+  function hideClaim(): void {
+    mjClaim.hide();
   }
 
   return {
@@ -249,6 +285,7 @@ export function createGameBoard(parent: Screen): GameBoard {
       right: mjRight,
       bottom: mjBottom,
       fx: mjFx,
+      claim: mjClaim,
     },
     th: { info: thInfo, seats: thSeats, hint: thHint },
     showText() {
@@ -273,6 +310,8 @@ export function createGameBoard(parent: Screen): GameBoard {
     setMjBorder,
     showFx,
     hideFx,
+    showClaim,
+    hideClaim,
   };
 }
 
@@ -325,39 +364,60 @@ interface Chip {
   width: number;
 }
 
-export type TileChipSize = "hand" | "table" | "last";
+export type TileChipSize = "hand" | "table" | "last" | "other";
 
 interface TileGeom {
   w: number;
   h: number;
 }
 
-/** 高:宽 ≈ 43:33。容不下时按同比例从大到小选用。 */
-const TILE_SCALES: TileGeom[] = [
+/**
+ * 终端格子约 1:2，手牌默认 6×4 对应实体牌 33:43。
+ * 他家默认约 1/3（2×2），牌多了再缩小，不会撑满空位。
+ */
+const HAND_SCALES: TileGeom[] = [
   { w: 6, h: 4 },
   { w: 5, h: 3 },
   { w: 4, h: 3 },
   { w: 4, h: 2 },
 ];
 
-function rowWidth(n: number, w: number, gap = 1): number {
-  if (n <= 0) return 0;
-  return n * w + (n - 1) * gap;
+const OTHER_SCALES: TileGeom[] = [
+  { w: 2, h: 2 },
+  { w: 2, h: 1 },
+];
+
+function scalesFor(size: TileChipSize): TileGeom[] {
+  return size === "hand" || size === "last" ? HAND_SCALES : OTHER_SCALES;
 }
 
-function pickGeom(n: number, cols: number, maxRows = 1): TileGeom {
+function pickGeom(
+  n: number,
+  cols: number,
+  scales: TileGeom[],
+  maxHeight?: number,
+): TileGeom {
   const count = Math.max(n, 1);
-  for (const g of TILE_SCALES) {
+  const heightLimit = maxHeight && maxHeight > 0 ? maxHeight : 1_000;
+  for (const g of scales) {
     const per = Math.max(1, Math.floor((cols + 1) / (g.w + 1)));
-    if (Math.ceil(count / per) <= maxRows) return g;
+    const wrapRows = Math.ceil(count / per);
+    const height = wrapRows * g.h + Math.max(0, wrapRows - 1);
+    if (height <= heightLimit) return g;
   }
-  return TILE_SCALES[TILE_SCALES.length - 1]!;
+  return scales[scales.length - 1]!;
 }
 
 function makeChip(t: TileLike, geom: TileGeom, selected = false, locked = false): Chip {
   const { a, b } = tileFace(t);
   const fg = tileFg(t, selected, locked);
   const paint = (s: string) => paintFg(s, fg);
+  if (geom.w <= 2) {
+    if (geom.h <= 1) {
+      return { width: 2, lines: [paint(tileGlyph(t as never))] };
+    }
+    return { width: 2, lines: [paint(a), paint(b)] };
+  }
   const inner = Math.max(2, geom.w - 2);
   const width = inner + 2;
   const top = `┌${"─".repeat(inner)}┐`;
@@ -365,6 +425,21 @@ function makeChip(t: TileLike, geom: TileGeom, selected = false, locked = false)
   const ra = `│${padFace(a, inner)}│`;
   const rb = `│${padFace(b, inner)}│`;
   const raw = geom.h >= 4 ? [top, ra, rb, bot] : geom.h >= 3 ? [top, ra, rb] : [ra, rb];
+  return { width, lines: raw.map(paint) };
+}
+
+function backChip(geom: TileGeom): Chip {
+  const paint = (s: string) => paintFg(s, "white-fg");
+  if (geom.w <= 2) {
+    if (geom.h <= 1) return { width: 2, lines: [paint("▓▓")] };
+    return { width: 2, lines: [paint("┌┐"), paint("└┘")] };
+  }
+  const inner = Math.max(2, geom.w - 2);
+  const width = inner + 2;
+  const top = `┌${"─".repeat(inner)}┐`;
+  const mid = `│${"░".repeat(inner)}│`;
+  const bot = `└${"─".repeat(inner)}┘`;
+  const raw = geom.h >= 4 ? [top, mid, mid, bot] : geom.h >= 3 ? [top, mid, bot] : [top, bot];
   return { width, lines: raw.map(paint) };
 }
 
@@ -400,7 +475,7 @@ function packChips(chips: Chip[], maxCols: number, gap = 1): string {
 
 export function renderTiles(
   tiles: TileLike[],
-  _size: TileChipSize,
+  size: TileChipSize,
   opts?: {
     cols?: number;
     cursor?: number;
@@ -408,13 +483,19 @@ export function renderTiles(
     drawnId?: string;
     drawnGap?: number;
     maxRows?: number;
+    maxHeight?: number;
   },
 ): string {
   if (!tiles.length) return "-";
   const cols = Math.max(8, opts?.cols ?? 80);
+  const scales = scalesFor(size);
   const drawnIndex = opts?.drawnId ? tiles.findIndex((t) => t.id === opts.drawnId) : -1;
   const extra = drawnIndex > 0 ? 1 : 0;
-  const geom = pickGeom(tiles.length + extra, cols, opts?.maxRows ?? 1);
+  let maxHeight = opts?.maxHeight;
+  if (maxHeight == null && opts?.maxRows != null) {
+    maxHeight = opts.maxRows * scales[0]!.h + Math.max(0, opts.maxRows - 1);
+  }
+  const geom = pickGeom(tiles.length + extra, cols, scales, maxHeight);
   const drawnGap = Math.max(2, Math.round((opts?.drawnGap ?? 4) * (geom.w / 6)));
   const chips: Chip[] = [];
   for (let i = 0; i < tiles.length; i++) {
@@ -425,10 +506,15 @@ export function renderTiles(
   return packChips(chips, cols, 1);
 }
 
-export function renderMelds(melds: Array<{ tiles: TileLike[] }>, cols: number): string {
+export function renderMelds(
+  melds: Array<{ tiles: TileLike[] }>,
+  cols: number,
+  size: TileChipSize = "hand",
+  maxHeight?: number,
+): string {
   if (!melds.length) return "-";
   const n = melds.reduce((s, m) => s + m.tiles.length, 0) + Math.max(0, melds.length - 1);
-  const geom = pickGeom(n, cols, 1);
+  const geom = pickGeom(n, cols, scalesFor(size), maxHeight);
   const chips: Chip[] = [];
   for (let i = 0; i < melds.length; i++) {
     if (i > 0) chips.push(blankChip(Math.max(1, Math.floor(geom.w / 2)), geom.h));
@@ -437,45 +523,50 @@ export function renderMelds(melds: Array<{ tiles: TileLike[] }>, cols: number): 
   return packChips(chips, cols, 1);
 }
 
-/** 对家横排副露|弃牌（容不下则缩小或改竖排）；上家/下家竖排并自动缩小 */
-export function renderSeatTiles(
+export function renderHiddenHand(count: number, cols: number, maxHeight?: number): string {
+  if (count <= 0) return "-";
+  const geom = pickGeom(count, cols, OTHER_SCALES, maxHeight);
+  const chips = Array.from({ length: count }, () => backChip(geom));
+  return packChips(chips, cols, 1);
+}
+
+/** 他家：副露 + 手牌（牌背或亮出） */
+export function renderOtherSeat(
   melds: Array<{ tiles: TileLike[] }>,
-  discards: TileLike[],
+  concealedCount: number,
+  revealedHand: TileLike[] | undefined,
   cols: number,
-  layout: "row" | "stack",
+  maxHeight?: number,
 ): string {
-  const meldTiles = melds.flatMap((m) => m.tiles);
-  const discs = discards.slice(-16);
-  const n1 = meldTiles.length;
-  const n2 = discs.length;
-  if (!n1 && !n2) return "-";
-
-  if (layout === "row") {
-    let geom = TILE_SCALES[TILE_SCALES.length - 1]!;
-    let oneRow = false;
-    for (const g of TILE_SCALES) {
-      const sep = n1 > 0 && n2 > 0 ? 3 : 0;
-      if (rowWidth(n1, g.w) + sep + rowWidth(n2, g.w) <= cols) {
-        geom = g;
-        oneRow = true;
-        break;
-      }
-    }
-    if (oneRow) {
-      const chips: Chip[] = [];
-      for (const t of meldTiles) chips.push(makeChip(t, geom));
-      if (n1 && n2) chips.push(blankChip(3, geom.h));
-      for (const t of discs) chips.push(makeChip(t, geom));
-      const w1 = rowWidth(n1, geom.w);
-      const label = n1 && n2 ? `副露${" ".repeat(Math.max(1, w1 + 3 - 4))}弃牌` : n1 ? "副露" : "弃牌";
-      return `${label}\n${packChips(chips, cols, 1)}`;
-    }
-  }
-
   const parts: string[] = [];
-  if (n1) parts.push(`副露\n${renderTiles(meldTiles, "table", { cols, maxRows: 2 })}`);
-  if (n2) parts.push(`弃牌\n${renderTiles(discs, "table", { cols, maxRows: 2 })}`);
-  return parts.join("\n");
+  const meldH = maxHeight ? Math.max(2, Math.floor(maxHeight / 3)) : undefined;
+  const handH = maxHeight ? Math.max(2, maxHeight - (meldH ?? 0) - 2) : undefined;
+  if (melds.length) {
+    parts.push(`副露\n${renderMelds(melds, cols, "other", meldH)}`);
+  }
+  if (revealedHand?.length) {
+    parts.push(`手牌\n${renderTiles(revealedHand, "other", { cols, maxHeight: handH })}`);
+  } else if (concealedCount > 0) {
+    parts.push(`手牌\n${renderHiddenHand(concealedCount, cols, handH)}`);
+  }
+  return parts.length ? parts.join("\n") : "-";
+}
+
+export function renderDiscardRiver(
+  groups: Array<{ name: string; discards: TileLike[] }>,
+  cols: number,
+  maxHeight?: number,
+): string {
+  if (!groups.length) return "暂无弃牌";
+  const per = Math.max(3, Math.floor((maxHeight ?? 20) / Math.max(1, groups.length)));
+  return groups
+    .map((g) => {
+      const tiles = g.discards.length
+        ? renderTiles(g.discards, "other", { cols, maxHeight: Math.max(1, per - 1) })
+        : "-";
+      return `{bold}${g.name}{/}\n${tiles}`;
+    })
+    .join("\n");
 }
 
 /** 单行文字（日志等窄处） */
@@ -490,9 +581,10 @@ export function renderBigHand(
   lockedTileId: string | null,
   drawnId?: string,
   cols = 80,
+  maxHeight?: number,
 ): string {
   if (!tiles.length) return "(无手牌)";
-  return renderTiles(tiles, "hand", { cols, cursor, lockedTileId, drawnId, drawnGap: 4 });
+  return renderTiles(tiles, "hand", { cols, cursor, lockedTileId, drawnId, drawnGap: 4, maxHeight });
 }
 
 export function colorPoker(c: { suit: string; rank: number }): string {

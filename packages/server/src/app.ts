@@ -209,6 +209,10 @@ export function createApp(opts: {
         if (!ctx.roomId) throw Object.assign(new Error("不在房间"), { code: "NOT_IN_ROOM" });
         const room = lobby.setReady(ctx.roomId, ctx.userId!, p.ready);
         broadcastRoom(room.roomId);
+        if (lobby.canContinueMatch(room)) {
+          matches.nextRound(room);
+          broadcastRoom(room.roomId);
+        }
         break;
       }
       case "room.addBot": {
